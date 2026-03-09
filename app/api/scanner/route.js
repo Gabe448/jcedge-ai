@@ -1,5 +1,15 @@
-const FMP = process.env.FMP_API_KEY
-const BASE = 'https://financialmodelingprep.com/stable'
+// Yahoo Finance — no API key needed, completely free
+
+const TICKERS = [
+  'AAPL','MSFT','NVDA','AMZN','META','GOOGL','TSLA','AVGO','COST','NFLX',
+  'AMD','ADBE','CSCO','TXN','QCOM','AMGN','INTU','AMAT','BKNG','PANW',
+  'SBUX','GILD','ADI','VRTX','REGN','MDLZ','ADP','LRCX','MU','KLAC',
+  'JPM','V','MA','UNH','JNJ','WMT','PG','HD','BAC','XOM',
+  'CVX','LLY','ABBV','MRK','PFE','TMO','ABT','ACN','CRM','ORCL',
+  'NOW','UBER','SHOP','COIN','PLTR','APP','HOOD','HIMS','DUOL','DDOG',
+  'SNOW','CRWD','ZS','NET','PYPL','MELI','TTD','CELH','NKE','LULU',
+  'SPOT','ARM','INTC','IBM','SQ','AFRM','RBLX','SOFI','ABNB','FTNT'
+]
 
 function scoreStock(s) {
   let fund = 0
@@ -33,37 +43,47 @@ function scoreStock(s) {
   return { ...s, score, breakdown: { fundamentals, macro, mispricing, technical }, archetype, upside: +upside.toFixed(1), stopPct, rr }
 }
 
+async function fetchYahoo(symbols) {
+  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols.join(',')}&fields=symbol,longName,sector,regularMarketPrice,trailingPE,revenueGrowth,profitMargins,returnOnEquity,debtToEquity,fiftyTwoWeekHigh,fiftyTwoWeekLow,averageVolume,regularMarketVolume,regularMarketChangePercent`
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0' }
+  })
+  if (!res.ok) throw new Error(`Yahoo error: ${res.status}`)
+  const data = await res.json()
+  return data?.quoteResponse?.result || []
+}
+
 export async function GET() {
   try {
-    // Use company screener - single call, returns fundamentals + price, free tier
-    const url = `${BASE}/company-screener?exchange=nasdaq,nyse&limit=200&apikey=${FMP}`
-    const res = await fetch(url)
-    if (!res.ok) throw new Error(`FMP error: ${res.status}`)
-    const data = await res.json()
-    if (!Array.isArray(data)) throw new Error('Invalid response from FMP')
+    // Fetch in batches of 20
+    const chunks = []
+    for (let i = 0; i < TICKERS.length; i += 20) chunks.push(TICKERS.slice(i, i + 20))
 
-    const stocks = data
-      .filter(s => s.symbol && s.price && s.marketCap > 1_000_000_000)
-      .map(s => {
-        const price = s.price || 0
-        const high52 = s.yearHigh || price
-        const low52 = s.yearLow || price * 0.7
+    const results = await Promise.all(chunks.map(chunk => fetchYahoo(chunk).catch(() => [])))
+    const quotes = results.flat()
+
+    const stocks = quotes
+      .filter(q => q.regularMarketPrice)
+      .map(q => {
+        const price = q.regularMarketPrice || 0
+        const high52 = q.fiftyTwoWeekHigh || price
+        const low52 = q.fiftyTwoWeekLow || price * 0.7
         const from52h = high52 > 0 ? +((( price - high52) / high52) * 100).toFixed(1) : 0
-        const avgVol = s.avgVolume || 1
-        const vol_ratio = avgVol > 0 ? +((s.volume || avgVol) / avgVol).toFixed(2) : 1
+        const avgVol = q.averageVolume || 1
+        const vol_ratio = avgVol > 0 ? +((q.regularMarketVolume || avgVol) / avgVol).toFixed(2) : 1
         const range = high52 - low52
         const rsi = range > 0 ? Math.round(((price - low52) / range) * 100) : 50
         return {
-          ticker: s.symbol,
-          name: s.companyName || s.symbol,
-          sector: s.sector || 'Unknown',
+          ticker: q.symbol,
+          name: q.longName || q.symbol,
+          sector: q.sector || 'Unknown',
           price: +price.toFixed(2),
-          pe: +(s.pe || 0).toFixed(1),
+          pe: +(q.trailingPE || 0).toFixed(1),
           eps_beat: 0,
-          rev_growth: +(s.revenueGrowth * 100 || 0).toFixed(1),
-          margin: +(s.netProfitMargin * 100 || 0).toFixed(1),
-          roe: +(s.returnOnEquity * 100 || 0).toFixed(1),
-          debt_eq: +(s.debtToEquity || 0).toFixed(2),
+          rev_growth: +((q.revenueGrowth || 0) * 100).toFixed(1),
+          margin: +((q.profitMargins || 0) * 100).toFixed(1),
+          roe: +((q.returnOnEquity || 0) * 100).toFixed(1),
+          debt_eq: +(q.debtToEquity || 0).toFixed(2),
           rsi, from52h, vol_ratio,
           pattern: `${from52h < -20 ? 'Deep pullback' : from52h < -10 ? 'Pullback' : 'Near highs'} · RSI ${rsi}`,
           overhang: 'See AI analysis',
