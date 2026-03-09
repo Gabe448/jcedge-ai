@@ -45,14 +45,9 @@ function LevelChart({ stock }) {
   const tp3 = +(price * (1 + stock.upside / 100)).toFixed(2)
 
   useEffect(() => {
-    fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${stock.ticker}?interval=1d&range=1y`, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }
-    })
+    fetch(`/api/chart?ticker=${stock.ticker}`)
       .then(r => r.json())
-      .then(d => {
-        const closes = d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || []
-        setPrices(closes.filter(Boolean))
-      })
+      .then(d => { if (d.prices) setPrices(d.prices) })
       .catch(() => {})
   }, [stock.ticker])
 
