@@ -63,7 +63,7 @@ function LevelChart({ stock }) {
 
   return (
     <div style={{ background: '#0f0f0f', borderRadius: 10, overflow: 'hidden', marginBottom: 4 }}>
-      <svg width="100%" viewBox={\} style={{ display: 'block' }}>
+      <svg width="100%" viewBox={"0 0 " + W + " " + H} style={{ display: "block" }}>
         {levels.map(({ price: p, color, label, dash }) => {
           const y = toY(p)
           return (
