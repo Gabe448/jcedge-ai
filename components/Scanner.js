@@ -35,6 +35,51 @@ function Spinner({ message }) {
   )
 }
 
+
+function LevelChart({ stock }) {
+  const price = stock.price
+  const stop = +(price * (1 - stock.stopPct / 100)).toFixed(2)
+  const tp1 = +(price * 1.08).toFixed(2)
+  const tp2 = +(price * 1.15).toFixed(2)
+  const tp3 = +(price * (1 + stock.upside / 100)).toFixed(2)
+
+  const allPrices = [stop, price, tp1, tp2, tp3]
+  const minP = Math.min(...allPrices) * 0.995
+  const maxP = Math.max(...allPrices) * 1.005
+  const range = maxP - minP
+
+  const W = 608, H = 160, PAD_L = 62, PAD_R = 40, PAD_T = 14, PAD_B = 14
+  const chartH = H - PAD_T - PAD_B
+
+  const toY = p => PAD_T + chartH - ((p - minP) / range) * chartH
+
+  const levels = [
+    { price: stop,  color: '#ef4444', label: 'Stop',  dash: false },
+    { price: price, color: '#eab308', label: 'Entry', dash: true  },
+    { price: tp1,   color: '#4ade80', label: 'TP1',   dash: false },
+    { price: tp2,   color: '#22c55e', label: 'TP2',   dash: false },
+    { price: tp3,   color: '#059669', label: 'TP3',   dash: false },
+  ]
+
+  return (
+    <div style={{ background: '#0f0f0f', borderRadius: 10, overflow: 'hidden', marginBottom: 4 }}>
+      <svg width="100%" viewBox={\} style={{ display: 'block' }}>
+        {levels.map(({ price: p, color, label, dash }) => {
+          const y = toY(p)
+          return (
+            <g key={label}>
+              <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke={color} strokeWidth={1.5} strokeDasharray={dash ? '6 4' : 'none'} opacity={0.85} />
+              <text x={PAD_L - 5} y={y + 4} textAnchor="end" fill={color} fontSize={9} fontFamily="monospace">${p}</text>
+              <text x={W - PAD_R + 5} y={y + 4} textAnchor="start" fill={color} fontSize={9} fontFamily="monospace" opacity={0.8}>{label}</text>
+            </g>
+          )
+        })}
+        <circle cx={PAD_L + (W - PAD_L - PAD_R) * 0.35} cy={toY(price)} r={3.5} fill="#eab308" />
+      </svg>
+    </div>
+  )
+}
+
 function PlanModal({ stock, onClose }) {
   const [plan, setPlan] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -78,6 +123,7 @@ function PlanModal({ stock, onClose }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <LevelChart stock={stock} />
               <div style={{ background: plan.overhang_rational === false ? '#ecfdf5' : '#fffbeb', border: `1px solid ${plan.overhang_rational === false ? '#bbf7d0' : '#fde68a'}`, borderRadius: 8, padding: '13px 15px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <span style={{ fontSize: 14 }}>{plan.overhang_rational === false ? '🟢' : '🟡'}</span>
