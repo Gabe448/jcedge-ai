@@ -6,6 +6,13 @@ export async function POST(req) {
   try {
     const stock = await req.json()
 
+    const price = stock.price
+    const stopPrice = +(price * (1 - stock.stopPct / 100)).toFixed(2)
+    const tp1Price = +(price * 1.08).toFixed(2)
+    const tp2Price = +(price * 1.15).toFixed(2)
+    const tp3Price = +(price * (1 + stock.upside / 100)).toFixed(2)
+    const high52 = +(price / (1 + stock.from52h / 100)).toFixed(2)
+
     const systemPrompt = `You are a senior buy-side equity analyst and trader. Your edge: find fundamentally strong stocks temporarily mispriced by a RESOLVABLE overhang, at a key structural level, with a macro tailwind.
 
 Real trades this strategy produced:
@@ -14,46 +21,51 @@ Real trades this strategy produced:
 - PLTR: Triangle compression + Iran war tailwind. 6.4R, +850%.
 - PYPL: 7x PE anomaly. Double bottom. LEAPs for position trade.
 
-CRITICAL REASONING STEP — stress-test the overhang before building the plan:
-1. Is the selloff rational given actual fundamentals? Run the numbers.
+CRITICAL REASONING — stress-test the overhang before building the plan:
+1. Is the selloff rational given actual fundamentals?
 2. Can the stated reason actually impair the business long-term?
-3. Example: "Claude Code caused cybersecurity crash" — does an AI coding tool eliminate enterprise security? No. Cybersecurity spend is non-discretionary. AI makes infrastructure MORE critical to protect. Selloff = narrative overreaction = mispricing.
-4. Temporary/sentiment overhang + intact fundamentals = HIGH conviction.
+3. Temporary/sentiment overhang + intact fundamentals = HIGH conviction.
 
-Respond ONLY with a valid JSON object, no markdown.`
+IMPORTANT: Use ONLY the exact price levels provided. Do not invent or round numbers.
+Respond ONLY with a valid JSON object, no markdown, no backticks.`
 
-    const userPrompt = `Analyze this stock and build a trade plan.
+    const userPrompt = `Analyze ${stock.ticker} and build a trade plan using EXACTLY these levels.
 
 STOCK: ${stock.ticker} (${stock.name}) | Sector: ${stock.sector} | Archetype: ${stock.archetype}
 
 FUNDAMENTALS:
-- EPS beat: ${stock.eps_beat}% | Revenue growth: ${stock.rev_growth}% | Net margin: ${stock.margin}%
-- ROE: ${stock.roe}% | P/E: ${stock.pe}x | Debt/Equity: ${stock.debt_eq}
+- Revenue growth: ${stock.rev_growth}% | Net margin: ${stock.margin}% | ROE: ${stock.roe}%
+- P/E: ${stock.pe}x | Debt/Equity: ${stock.debt_eq}
 
 TECHNICAL:
-- RSI: ${stock.rsi} | Distance from 52w high: ${stock.from52h}% | Volume ratio: ${stock.vol_ratio}x
+- Current price: $${price}
+- 52-week high: $${high52} | Distance from high: ${stock.from52h}%
+- RSI: ${stock.rsi} | Volume ratio: ${stock.vol_ratio}x
 - Pattern: ${stock.pattern}
 
-CONTEXT:
-- Overhang: ${stock.overhang}
-- Macro tailwind: ${stock.macro}
-- Sentiment: ${stock.sentiment}/100
+LEVELS (use these exactly, do not change them):
+- Entry: ~$${price} (current price)
+- Stop: $${stopPrice} (${stock.stopPct}% risk)
+- TP1: $${tp1Price} (+8%)
+- TP2: $${tp2Price} (+15%)
+- TP3: $${tp3Price} (${stock.upside}% upside, toward 52w high)
+- Est R:R: ${stock.rr}R
 
-Respond ONLY with this JSON:
+Return ONLY this JSON structure:
 {
   "overhang_rational": false,
-  "overhang_reasoning": "2-3 sentences stress-testing the selloff",
-  "thesis": "2-3 sentences connecting fundamentals + overhang resolution + macro",
-  "overhang_resolution": "why and when this resolves",
-  "entry_logic": "exact chart trigger",
-  "entry_price_note": "where relative to pattern",
-  "stop_logic": "exactly where and why",
-  "tp1": "first trim target",
-  "tp2": "second trim",
-  "tp3": "runner target",
+  "overhang_reasoning": "2-3 sentences stress-testing why the selloff is or isn't rational",
+  "thesis": "2-3 sentences: fundamentals + overhang resolution + macro tailwind",
+  "overhang_resolution": "why and when this overhang resolves",
+  "entry_logic": "exact chart trigger to enter near $${price}",
+  "entry_price_note": "what $${price} represents technically",
+  "stop_logic": "stop at $${stopPrice} — why this level is the invalidation point",
+  "tp1": "$${tp1Price} — why trim here",
+  "tp2": "$${tp2Price} — why trim here",
+  "tp3": "$${tp3Price} — runner target rationale",
   "instrument": "Calls or LEAPs or Stock",
-  "timeframe": "e.g. 2-6 weeks",
-  "risk_note": "the one thing that invalidates this",
+  "timeframe": "specific timeframe e.g. 2-4 weeks",
+  "risk_note": "the single most important thing that invalidates this trade",
   "conviction": "HIGH or MEDIUM or LOW"
 }`
 
