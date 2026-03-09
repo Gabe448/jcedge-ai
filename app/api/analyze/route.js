@@ -1,11 +1,54 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { createClient } from '@supabase/supabase-js'
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+)
+
+const PLAN_TTL = 48 * 60 * 60 * 1000 // 48 hours
+
+async function getLivePrice(ticker) {
+  try {
+    const res = await fetch(
+      `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }
+    )
+    if (!res.ok) return null
+    const data = await res.json()
+    return data?.chart?.result?.[0]?.meta?.regularMarketPrice || null
+  } catch { return null }
+}
 
 export async function POST(req) {
   try {
     const stock = await req.json()
 
+    // Check cache first
+    const { data: cached } = await supabase
+      .from('ai_plans')
+      .select('*')
+      .eq('ticker', stock.ticker)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+
+    if (cached) {
+      const age = Date.now() - new Date(cached.created_at).getTime()
+      if (age < PLAN_TTL) {
+        // Return cached plan with updated live price
+        const livePrice = await getLivePrice(stock.ticker)
+        return Response.json({
+          ...cached.plan,
+          _cached: true,
+          _cachedAt: cached.created_at,
+          _livePrice: livePrice || stock.price
+        })
+      }
+    }
+
+    // No cache or expired — generate new plan
     const price = stock.price
     const stopPrice = +(price * (1 - stock.stopPct / 100)).toFixed(2)
     const tp1Price = +(price * 1.08).toFixed(2)
@@ -43,29 +86,29 @@ TECHNICAL:
 - RSI: ${stock.rsi} | Volume ratio: ${stock.vol_ratio}x
 - Pattern: ${stock.pattern}
 
-LEVELS (use these exactly, do not change them):
-- Entry: ~$${price} (current price)
+LEVELS (use these exactly):
+- Entry: ~$${price}
 - Stop: $${stopPrice} (${stock.stopPct}% risk)
 - TP1: $${tp1Price} (+8%)
 - TP2: $${tp2Price} (+15%)
-- TP3: $${tp3Price} (${stock.upside}% upside, toward 52w high)
+- TP3: $${tp3Price} (${stock.upside}% upside toward 52w high)
 - Est R:R: ${stock.rr}R
 
-Return ONLY this JSON structure:
+Return ONLY this JSON:
 {
   "overhang_rational": false,
-  "overhang_reasoning": "2-3 sentences stress-testing why the selloff is or isn't rational",
+  "overhang_reasoning": "2-3 sentences stress-testing the selloff",
   "thesis": "2-3 sentences: fundamentals + overhang resolution + macro tailwind",
-  "overhang_resolution": "why and when this overhang resolves",
-  "entry_logic": "exact chart trigger to enter near $${price}",
+  "overhang_resolution": "why and when this resolves",
+  "entry_logic": "exact chart trigger near $${price}",
   "entry_price_note": "what $${price} represents technically",
-  "stop_logic": "stop at $${stopPrice} — why this level is the invalidation point",
+  "stop_logic": "stop at $${stopPrice} — why this is the invalidation point",
   "tp1": "$${tp1Price} — why trim here",
   "tp2": "$${tp2Price} — why trim here",
   "tp3": "$${tp3Price} — runner target rationale",
   "instrument": "Calls or LEAPs or Stock",
   "timeframe": "specific timeframe e.g. 2-4 weeks",
-  "risk_note": "the single most important thing that invalidates this trade",
+  "risk_note": "the one thing that invalidates this trade",
   "conviction": "HIGH or MEDIUM or LOW"
 }`
 
@@ -78,8 +121,16 @@ Return ONLY this JSON structure:
 
     const raw = message.content[0].text.trim()
       .replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '').trim()
+    const plan = JSON.parse(raw)
 
-    return Response.json(JSON.parse(raw))
+    // Save to cache
+    await supabase.from('ai_plans').insert({
+      ticker: stock.ticker,
+      plan,
+      created_at: new Date().toISOString()
+    })
+
+    return Response.json(plan)
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 })
   }
