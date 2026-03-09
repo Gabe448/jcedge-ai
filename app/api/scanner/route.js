@@ -1,5 +1,3 @@
-// Yahoo Finance — no API key needed, completely free
-
 const TICKERS = [
   'AAPL','MSFT','NVDA','AMZN','META','GOOGL','TSLA','AVGO','COST','NFLX',
   'AMD','ADBE','CSCO','TXN','QCOM','AMGN','INTU','AMAT','BKNG','PANW',
@@ -43,54 +41,80 @@ function scoreStock(s) {
   return { ...s, score, breakdown: { fundamentals, macro, mispricing, technical }, archetype, upside: +upside.toFixed(1), stopPct, rr }
 }
 
-async function fetchYahoo(symbols) {
-  const url = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${symbols.join(',')}&fields=symbol,longName,sector,regularMarketPrice,trailingPE,revenueGrowth,profitMargins,returnOnEquity,debtToEquity,fiftyTwoWeekHigh,fiftyTwoWeekLow,averageVolume,regularMarketVolume,regularMarketChangePercent`
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0' }
-  })
-  if (!res.ok) throw new Error(`Yahoo error: ${res.status}`)
-  const data = await res.json()
-  return data?.quoteResponse?.result || []
+async function fetchQuote(ticker) {
+  try {
+    const res = await fetch(
+      `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1y`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }
+    )
+    if (!res.ok) return null
+    const data = await res.json()
+    const meta = data?.chart?.result?.[0]?.meta
+    if (!meta) return null
+    return meta
+  } catch { return null }
+}
+
+async function fetchSummary(ticker) {
+  try {
+    const res = await fetch(
+      `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${ticker}?modules=financialData,defaultKeyStatistics,summaryDetail,assetProfile`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }
+    )
+    if (!res.ok) return null
+    const data = await res.json()
+    return data?.quoteSummary?.result?.[0] || null
+  } catch { return null }
 }
 
 export async function GET() {
   try {
-    // Fetch in batches of 20
-    const chunks = []
-    for (let i = 0; i < TICKERS.length; i += 20) chunks.push(TICKERS.slice(i, i + 20))
+    // Fetch all tickers in parallel with a concurrency limit
+    const concurrency = 10
+    const stocks = []
 
-    const results = await Promise.all(chunks.map(chunk => fetchYahoo(chunk).catch(() => [])))
-    const quotes = results.flat()
+    for (let i = 0; i < TICKERS.length; i += concurrency) {
+      const chunk = TICKERS.slice(i, i + concurrency)
+      const results = await Promise.all(chunk.map(async ticker => {
+        const [meta, summary] = await Promise.all([
+          fetchQuote(ticker),
+          fetchSummary(ticker)
+        ])
+        if (!meta) return null
 
-    const stocks = quotes
-      .filter(q => q.regularMarketPrice)
-      .map(q => {
-        const price = q.regularMarketPrice || 0
-        const high52 = q.fiftyTwoWeekHigh || price
-        const low52 = q.fiftyTwoWeekLow || price * 0.7
+        const price = meta.regularMarketPrice || 0
+        const high52 = meta.fiftyTwoWeekHigh || price
+        const low52 = meta.fiftyTwoWeekLow || price * 0.7
         const from52h = high52 > 0 ? +((( price - high52) / high52) * 100).toFixed(1) : 0
-        const avgVol = q.averageVolume || 1
-        const vol_ratio = avgVol > 0 ? +((q.regularMarketVolume || avgVol) / avgVol).toFixed(2) : 1
+        const avgVol = meta.averageDailyVolume3Month || 1
+        const vol_ratio = avgVol > 0 ? +((meta.regularMarketVolume || avgVol) / avgVol).toFixed(2) : 1
         const range = high52 - low52
         const rsi = range > 0 ? Math.round(((price - low52) / range) * 100) : 50
+
+        const fin = summary?.financialData || {}
+        const stats = summary?.defaultKeyStatistics || {}
+        const profile = summary?.assetProfile || {}
+
         return {
-          ticker: q.symbol,
-          name: q.longName || q.symbol,
-          sector: q.sector || 'Unknown',
+          ticker,
+          name: meta.longName || meta.shortName || ticker,
+          sector: profile.sector || 'Unknown',
           price: +price.toFixed(2),
-          pe: +(q.trailingPE || 0).toFixed(1),
+          pe: +(stats.forwardPE?.raw || 0).toFixed(1),
           eps_beat: 0,
-          rev_growth: +((q.revenueGrowth || 0) * 100).toFixed(1),
-          margin: +((q.profitMargins || 0) * 100).toFixed(1),
-          roe: +((q.returnOnEquity || 0) * 100).toFixed(1),
-          debt_eq: +(q.debtToEquity || 0).toFixed(2),
+          rev_growth: +((fin.revenueGrowth?.raw || 0) * 100).toFixed(1),
+          margin: +((fin.profitMargins?.raw || 0) * 100).toFixed(1),
+          roe: +((fin.returnOnEquity?.raw || 0) * 100).toFixed(1),
+          debt_eq: +(fin.debtToEquity?.raw || 0).toFixed(2),
           rsi, from52h, vol_ratio,
           pattern: `${from52h < -20 ? 'Deep pullback' : from52h < -10 ? 'Pullback' : 'Near highs'} · RSI ${rsi}`,
           overhang: 'See AI analysis',
           macro: 'See AI analysis',
           sentiment: Math.min(100, Math.max(0, 50 + rsi * 0.3)),
         }
-      })
+      }))
+      stocks.push(...results.filter(Boolean))
+    }
 
     const scored = stocks
       .map(scoreStock)
