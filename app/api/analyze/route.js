@@ -1,159 +1,74 @@
-const FMP = process.env.FMP_API_KEY
+import Anthropic from 'anthropic'
 
-// Score a stock using the 4-layer system
-function scoreStock(s) {
-  let fund = 0
-  if (s.eps_beat > 15) fund += 10; else if (s.eps_beat > 5) fund += 6; else if (s.eps_beat > 0) fund += 3
-  if (s.rev_growth > 20) fund += 8; else if (s.rev_growth > 10) fund += 5; else if (s.rev_growth > 0) fund += 2
-  if (s.margin > 20) fund += 7; else if (s.margin > 10) fund += 4; else if (s.margin > 0) fund += 1
-  if (s.roe > 20) fund += 5
-  const fundamentals = Math.min(fund, 30)
+const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-  // Macro/sentiment proxy: revenue growth momentum + margin quality
-  let mac = 0
-  if (s.rev_growth > 30) mac += 20; else if (s.rev_growth > 15) mac += 15; else if (s.rev_growth > 5) mac += 10; else mac += 5
-  const macro = Math.min(mac, 25)
-
-  // Mispricing: down from highs despite strong fundamentals
-  let mis = 0
-  if (s.from52h < -15) mis += 10
-  if (s.from52h < -30) mis += 5
-  if (s.eps_beat > 0 && s.from52h < -10) mis += 8
-  if (s.pe > 0 && s.pe < 20 && s.rev_growth > 10) mis += 7 // value + growth
-  const mispricing = Math.min(mis, 25)
-
-  // Technical: RSI sweet spot, volume
-  let tech = 0
-  if (s.rsi > 35 && s.rsi < 60) tech += 8
-  if (s.rsi < 35) tech += 5 // oversold
-  if (s.vol_ratio > 1.5) tech += 6
-  if (s.vol_ratio > 2.0) tech += 6
-  const technical = Math.min(tech, 20)
-
-  const score = fundamentals + macro + mispricing + technical
-
-  // Archetype classification
-  let archetype = 'catalyst_surprise'
-  if (s.eps_beat > 20 && s.from52h < -15) archetype = 'earnings_mispricing'
-  else if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) archetype = 'deep_value'
-  else if (s.rev_growth > 25 && s.rsi < 60) archetype = 'macro_pattern'
-
-  const upside = Math.abs(s.from52h) * 0.65
-  const stopPct = s.rsi < 40 ? 4 : 6
-  const rr = stopPct > 0 ? +(upside / stopPct).toFixed(1) : 0
-
-  return { ...s, score, breakdown: { fundamentals, macro, mispricing, technical }, archetype, upside: +upside.toFixed(1), stopPct, rr }
-}
-
-async function fetchJSON(url) {
-  const res = await fetch(url, { next: { revalidate: 0 } })
-  if (!res.ok) throw new Error(`FMP error: ${res.status}`)
-  return res.json()
-}
-
-export async function GET() {
+export async function POST(req) {
   try {
-    // 1. Get QQQ + SPY holdings
-    const [qqq, spy] = await Promise.all([
-      fetchJSON(`https://financialmodelingprep.com/api/v3/etf-holder/QQQ?apikey=${FMP}`),
-      fetchJSON(`https://financialmodelingprep.com/api/v3/etf-holder/SPY?apikey=${FMP}`)
-    ])
+    const stock = await req.json()
 
-    // Deduplicate tickers, take top 200 by weight
-    const tickerSet = new Map()
-    ;[...qqq, ...spy].forEach(h => {
-      if (h.asset && h.weightPercentage) {
-        const existing = tickerSet.get(h.asset) || 0
-        tickerSet.set(h.asset, existing + parseFloat(h.weightPercentage || 0))
-      }
+    const systemPrompt = `You are a senior buy-side equity analyst and trader. Your edge: find fundamentally strong stocks temporarily mispriced by a RESOLVABLE overhang, at a key structural level, with a macro tailwind.
+
+Real trades this strategy produced:
+- COIN: Platform expansion missed by market. First green candle at $155 key level. +1100% on calls.
+- HIMS: 100% earnings surprise, sold off on legal overhang. Entered at $13.97. +1400% on calls.
+- PLTR: Triangle compression + Iran war tailwind. 6.4R, +850%.
+- PYPL: 7x PE anomaly. Double bottom. LEAPs for position trade.
+
+CRITICAL REASONING STEP — stress-test the overhang before building the plan:
+1. Is the selloff rational given actual fundamentals? Run the numbers.
+2. Can the stated reason actually impair the business long-term?
+3. Example: "Claude Code caused cybersecurity crash" — does an AI coding tool eliminate enterprise security? No. Cybersecurity spend is non-discretionary. AI makes infrastructure MORE critical to protect. Selloff = narrative overreaction = mispricing.
+4. Temporary/sentiment overhang + intact fundamentals = HIGH conviction.
+
+Respond ONLY with a valid JSON object, no markdown.`
+
+    const userPrompt = `Analyze this stock and build a trade plan.
+
+STOCK: ${stock.ticker} (${stock.name}) | Sector: ${stock.sector} | Archetype: ${stock.archetype}
+
+FUNDAMENTALS:
+- EPS beat: ${stock.eps_beat}% | Revenue growth: ${stock.rev_growth}% | Net margin: ${stock.margin}%
+- ROE: ${stock.roe}% | P/E: ${stock.pe}x | Debt/Equity: ${stock.debt_eq}
+
+TECHNICAL:
+- RSI: ${stock.rsi} | Distance from 52w high: ${stock.from52h}% | Volume ratio: ${stock.vol_ratio}x
+- Pattern: ${stock.pattern}
+
+CONTEXT:
+- Overhang: ${stock.overhang}
+- Macro tailwind: ${stock.macro}
+- Sentiment: ${stock.sentiment}/100
+
+Respond ONLY with this JSON:
+{
+  "overhang_rational": false,
+  "overhang_reasoning": "2-3 sentences stress-testing the selloff",
+  "thesis": "2-3 sentences connecting fundamentals + overhang resolution + macro",
+  "overhang_resolution": "why and when this resolves",
+  "entry_logic": "exact chart trigger",
+  "entry_price_note": "where relative to pattern",
+  "stop_logic": "exactly where and why",
+  "tp1": "first trim target",
+  "tp2": "second trim",
+  "tp3": "runner target",
+  "instrument": "Calls or LEAPs or Stock",
+  "timeframe": "e.g. 2-6 weeks",
+  "risk_note": "the one thing that invalidates this",
+  "conviction": "HIGH or MEDIUM or LOW"
+}`
+
+    const message = await client.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }]
     })
-    const tickers = [...tickerSet.keys()].slice(0, 200)
 
-    // 2. Batch fetch key metrics + quote in parallel (groups of 50)
-    const chunks = []
-    for (let i = 0; i < tickers.length; i += 50) {
-      chunks.push(tickers.slice(i, i + 50))
-    }
+    const raw = message.content[0].text.trim()
+      .replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '').trim()
 
-    const [metricsResults, quoteResults] = await Promise.all([
-      Promise.all(chunks.map(chunk =>
-        fetchJSON(`https://financialmodelingprep.com/api/v3/key-metrics-ttm/${chunk.join(',')}?apikey=${FMP}`)
-          .catch(() => [])
-      )),
-      Promise.all(chunks.map(chunk =>
-        fetchJSON(`https://financialmodelingprep.com/api/v3/quote/${chunk.join(',')}?apikey=${FMP}`)
-          .catch(() => [])
-      ))
-    ])
-
-    const metrics = metricsResults.flat()
-    const quotes = quoteResults.flat()
-
-    // Index by ticker
-    const metricsMap = {}
-    metrics.forEach(m => { if (m.symbol) metricsMap[m.symbol] = m })
-    const quoteMap = {}
-    quotes.forEach(q => { if (q.symbol) quoteMap[q.symbol] = q })
-
-    // 3. Fetch earnings surprises for all tickers
-    const earningsResults = await Promise.all(
-      chunks.map(chunk =>
-        fetchJSON(`https://financialmodelingprep.com/api/v3/earnings-surprises/${chunk[0]}?apikey=${FMP}&limit=1`)
-          .catch(() => [])
-      )
-    )
-
-    // Build stock objects
-    const stocks = []
-    for (const ticker of tickers) {
-      const m = metricsMap[ticker]
-      const q = quoteMap[ticker]
-      if (!m || !q || !q.price) continue
-
-      const price = q.price || 0
-      const high52 = q.yearHigh || price
-      const from52h = high52 > 0 ? +((( price - high52) / high52) * 100).toFixed(1) : 0
-      const avgVol = q.avgVolume || 1
-      const vol = q.volume || avgVol
-      const vol_ratio = avgVol > 0 ? +(vol / avgVol).toFixed(2) : 1
-
-      // RSI approximation from price vs 52w range
-      const low52 = q.yearLow || price * 0.7
-      const range = high52 - low52
-      const rsi = range > 0 ? Math.round(((price - low52) / range) * 100) : 50
-
-      const stock = {
-        ticker,
-        name: q.name || ticker,
-        sector: m.sector || 'Unknown',
-        price: +price.toFixed(2),
-        pe: +(m.peRatioTTM || 0).toFixed(1),
-        eps_beat: 0, // will update below
-        rev_growth: +((m.revenueGrowth || 0) * 100).toFixed(1),
-        margin: +((m.netProfitMarginTTM || 0) * 100).toFixed(1),
-        roe: +((m.roeTTM || 0) * 100).toFixed(1),
-        debt_eq: +(m.debtToEquityTTM || 0).toFixed(2),
-        rsi,
-        from52h,
-        vol_ratio,
-        pattern: `${from52h < -20 ? 'Deep pullback' : from52h < -10 ? 'Pullback' : 'Near highs'} · RSI ${rsi}`,
-        overhang: 'See AI analysis',
-        macro: 'See AI analysis',
-        sentiment: Math.min(100, Math.max(0, 50 + rsi * 0.3 + (m.revenueGrowth || 0) * 50)),
-      }
-      stocks.push(stock)
-    }
-
-    // 4. Score and sort, return top 60
-    const scored = stocks
-      .map(scoreStock)
-      .filter(s => s.score > 20 && s.pe > 0 && s.rev_growth > -20)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 60)
-
-    return Response.json({ stocks: scored, updatedAt: new Date().toISOString() })
+    return Response.json(JSON.parse(raw))
   } catch (err) {
-    console.error('Scanner API error:', err)
     return Response.json({ error: err.message }, { status: 500 })
   }
 }
