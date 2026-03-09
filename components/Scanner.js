@@ -37,6 +37,93 @@ function Spinner({ message }) {
 
 
 function LevelChart({ stock }) {
+  const [prices, setPrices] = useState([])
+  const price = stock.price
+  const stop = +(price * (1 - stock.stopPct / 100)).toFixed(2)
+  const tp1 = +(price * 1.08).toFixed(2)
+  const tp2 = +(price * 1.15).toFixed(2)
+  const tp3 = +(price * (1 + stock.upside / 100)).toFixed(2)
+
+  useEffect(() => {
+    fetch(`https://query2.finance.yahoo.com/v8/finance/chart/${stock.ticker}?interval=1d&range=1y`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    })
+      .then(r => r.json())
+      .then(d => {
+        const closes = d?.chart?.result?.[0]?.indicators?.quote?.[0]?.close || []
+        setPrices(closes.filter(Boolean))
+      })
+      .catch(() => {})
+  }, [stock.ticker])
+
+  const W = 608, H = 200, PAD_L = 62, PAD_R = 40, PAD_T = 14, PAD_B = 14
+  const chartH = H - PAD_T - PAD_B
+  const chartW = W - PAD_L - PAD_R
+
+  const allPrices = [stop, price, tp1, tp2, tp3, ...(prices.length ? prices : [price])]
+  const minP = Math.min(...allPrices) * 0.993
+  const maxP = Math.max(...allPrices) * 1.007
+  const range = maxP - minP
+
+  const toY = p => PAD_T + chartH - ((p - minP) / range) * chartH
+  const toX = i => PAD_L + (i / Math.max(prices.length - 1, 1)) * chartW
+
+  const levels = [
+    { price: stop,  color: '#ef4444', label: 'Stop',  dash: false },
+    { price: price, color: '#eab308', label: 'Entry', dash: true  },
+    { price: tp1,   color: '#4ade80', label: 'TP1',   dash: false },
+    { price: tp2,   color: '#22c55e', label: 'TP2',   dash: false },
+    { price: tp3,   color: '#059669', label: 'TP3',   dash: false },
+  ]
+
+  const linePath = prices.length > 1
+    ? prices.map((p, i) => `${i === 0 ? 'M' : 'L'} ${toX(i).toFixed(1)} ${toY(p).toFixed(1)}`).join(' ')
+    : null
+
+  const areaPath = linePath
+    ? `${linePath} L ${toX(prices.length - 1).toFixed(1)} ${H} L ${PAD_L} ${H} Z`
+    : null
+
+  const lastColor = prices.length > 1 && prices[prices.length - 1] > prices[0] ? '#22c55e' : '#ef4444'
+
+  return (
+    <div style={{ background: '#0a0a0a', borderRadius: 10, overflow: 'hidden', marginBottom: 4 }}>
+      <svg width="100%" height={H} viewBox={"0 0 " + W + " " + H} style={{ display: "block" }}>
+        <defs>
+          <linearGradient id={"grad_" + stock.ticker} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={lastColor} stopOpacity="0.15" />
+            <stop offset="100%" stopColor={lastColor} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+
+        {/* Price area fill */}
+        {areaPath && <path d={areaPath} fill={"url(#grad_" + stock.ticker + ")"} />}
+
+        {/* Price line */}
+        {linePath && <path d={linePath} fill="none" stroke={lastColor} strokeWidth={1.5} opacity={0.8} />}
+
+        {/* Level lines */}
+        {levels.map(({ price: p, color, label, dash }) => {
+          const y = toY(p)
+          return (
+            <g key={label}>
+              <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke={color} strokeWidth={1.2} strokeDasharray={dash ? '6 4' : 'none'} opacity={0.9} />
+              <text x={PAD_L - 5} y={y + 4} textAnchor="end" fill={color} fontSize={9} fontFamily="monospace">{"$"}{p}</text>
+              <text x={W - PAD_R + 5} y={y + 4} textAnchor="start" fill={color} fontSize={9} fontFamily="monospace" opacity={0.85}>{label}</text>
+            </g>
+          )
+        })}
+
+        {/* Current price dot */}
+        {prices.length > 0 && (
+          <circle cx={toX(prices.length - 1)} cy={toY(price)} r={3.5} fill="#eab308" />
+        )}
+      </svg>
+    </div>
+  )
+}
+
+function _OldLevelChart({ stock }) {
   const price = stock.price
   const stop = +(price * (1 - stock.stopPct / 100)).toFixed(2)
   const tp1 = +(price * 1.08).toFixed(2)
