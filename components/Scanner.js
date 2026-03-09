@@ -63,13 +63,13 @@ function LevelChart({ stock }) {
 
   return (
     <div style={{ background: '#0f0f0f', borderRadius: 10, overflow: 'hidden', marginBottom: 4 }}>
-      <svg width="100%" viewBox={"0 0 " + W + " " + H} style={{ display: "block" }}>
+      <svg width="100%" height={H} viewBox={"0 0 " + W + " " + H} preserveAspectRatio="none" style={{ display: "block" }}>
         {levels.map(({ price: p, color, label, dash }) => {
           const y = toY(p)
           return (
             <g key={label}>
               <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke={color} strokeWidth={1.5} strokeDasharray={dash ? '6 4' : 'none'} opacity={0.85} />
-              <text x={PAD_L - 5} y={y + 4} textAnchor="end" fill={color} fontSize={9} fontFamily="monospace">${p}</text>
+              <text x={PAD_L - 5} y={y + 4} textAnchor="end" fill={color} fontSize={9} fontFamily="monospace">{"$"}{p}</text>
               <text x={W - PAD_R + 5} y={y + 4} textAnchor="start" fill={color} fontSize={9} fontFamily="monospace" opacity={0.8}>{label}</text>
             </g>
           )
