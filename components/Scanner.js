@@ -318,7 +318,7 @@ function PlanModal({ stock, onClose, userId }) {
 
 const CACHE_TTL = 24 * 60 * 60 * 1000
 
-export default function Scanner() {
+export default function Scanner({ profile }) {
   const [stocks, setStocks] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadMsg, setLoadMsg] = useState('Checking cache...')
