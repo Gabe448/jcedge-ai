@@ -6,12 +6,6 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 )
 
-webpush.setVapidDetails(
-  'mailto:admin@jcedge.ai',
-  process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
-  process.env.VAPID_PRIVATE_KEY
-)
-
 async function getPrice(ticker) {
   try {
     const res = await fetch(
@@ -28,6 +22,12 @@ export async function GET(req) {
   if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
     return Response.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  webpush.setVapidDetails(
+    'mailto:admin@jcedge.ai',
+    process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+  )
 
   const { data: plans } = await supabase
     .from('followed_plans')
