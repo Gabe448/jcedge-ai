@@ -383,14 +383,24 @@ export default function Scanner({ profile }) {
 
   const filters = [
     { id: 'all', label: 'All' },
-    { id: 'catalyst_surprise', label: 'Catalyst Surprise' },
+    { id: 'long', label: '🟢 Long' },
+    { id: 'short', label: '🔴 Short' },
+    { id: 'oversold', label: 'Oversold' },
+    { id: 'overbought', label: 'Overbought' },
     { id: 'earnings_mispricing', label: 'Earnings Mispricing' },
     { id: 'macro_pattern', label: 'Macro + Pattern' },
     { id: 'deep_value', label: 'Deep Value' },
   ]
 
   const displayed = [...stocks]
-    .filter(s => filter === 'all' || s.archetype === filter)
+    .filter(s => {
+      if (filter === 'all') return true
+      if (filter === 'long') return s.direction === 'long'
+      if (filter === 'short') return s.direction === 'short'
+      if (filter === 'oversold') return s.rsi < 35
+      if (filter === 'overbought') return s.rsi > 70
+      return s.archetype === filter
+    })
     .filter(s => !search || s.ticker.includes(search.toUpperCase()) || s.name?.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => sort === 'rr' ? b.rr - a.rr : sort === 'growth' ? b.rev_growth - a.rev_growth : b.score - a.score)
 
@@ -457,6 +467,9 @@ export default function Scanner({ profile }) {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
                         <span style={{ fontWeight: 700, fontSize: 15, color: '#111' }}>{s.ticker}</span>
                         <Tag {...arch} />
+                        {s.direction === 'short' && <span style={{ fontSize: 9, fontWeight: 700, color: '#ef4444', background: '#fff5f5', border: '1px solid #fee2e2', padding: '1px 5px', borderRadius: 3 }}>SHORT</span>}
+                        {s.rsi < 35 && <span style={{ fontSize: 9, fontWeight: 600, color: '#7c3aed', background: '#f5f3ff', border: '1px solid #ddd6fe', padding: '1px 5px', borderRadius: 3 }}>OVERSOLD</span>}
+                        {s.rsi > 70 && <span style={{ fontSize: 9, fontWeight: 600, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', padding: '1px 5px', borderRadius: 3 }}>OVERBOUGHT</span>}
                       </div>
                       <div style={{ fontSize: 11, color: '#94a3b8' }}>{s.name} · {s.sector}</div>
                     </div>
