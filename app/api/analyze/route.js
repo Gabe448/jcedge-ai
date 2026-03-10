@@ -7,7 +7,7 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 )
 
-const PLAN_TTL = 48 * 60 * 60 * 1000 // 48 hours
+const PLAN_TTL = 48 * 60 * 60 * 1000
 
 async function getLivePrice(ticker) {
   try {
@@ -15,7 +15,6 @@ async function getLivePrice(ticker) {
       `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`,
       { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }
     )
-    if (!res.ok) return null
     const data = await res.json()
     return data?.chart?.result?.[0]?.meta?.regularMarketPrice || null
   } catch { return null }
@@ -25,7 +24,28 @@ export async function POST(req) {
   try {
     const stock = await req.json()
 
-    // Check cache first
+    // Check if user is following this stock — if so, return locked plan
+    if (stock.user_id) {
+      const { data: followed } = await supabase
+        .from('followed_plans')
+        .select('*')
+        .eq('user_id', stock.user_id)
+        .eq('ticker', stock.ticker)
+        .eq('active', true)
+        .single()
+
+      if (followed?.plan_data) {
+        const livePrice = await getLivePrice(stock.ticker)
+        return Response.json({
+          ...followed.plan_data,
+          _cached: true,
+          _locked: true,
+          _livePrice: livePrice || stock.price
+        })
+      }
+    }
+
+    // Check 48h AI cache
     const { data: cached } = await supabase
       .from('ai_plans')
       .select('*')
@@ -37,7 +57,6 @@ export async function POST(req) {
     if (cached) {
       const age = Date.now() - new Date(cached.created_at).getTime()
       if (age < PLAN_TTL) {
-        // Return cached plan with updated live price
         const livePrice = await getLivePrice(stock.ticker)
         return Response.json({
           ...cached.plan,
@@ -48,31 +67,31 @@ export async function POST(req) {
       }
     }
 
-    // No cache or expired — generate new plan
+    // Generate fresh plan — Claude determines entry
     const price = stock.price
-    const stopPrice = +(price * (1 - stock.stopPct / 100)).toFixed(2)
-    const tp1Price = +(price * 1.08).toFixed(2)
-    const tp2Price = +(price * 1.15).toFixed(2)
-    const tp3Price = +(price * (1 + stock.upside / 100)).toFixed(2)
     const high52 = +(price / (1 + stock.from52h / 100)).toFixed(2)
+    const low52 = +(high52 * (1 + stock.from52h / 100) * (stock.rsi / 100) * 0.7).toFixed(2)
 
     const systemPrompt = `You are a senior buy-side equity analyst and trader. Your edge: find fundamentally strong stocks temporarily mispriced by a RESOLVABLE overhang, at a key structural level, with a macro tailwind.
 
 Real trades this strategy produced:
-- COIN: Platform expansion missed by market. First green candle at $155 key level. +1100% on calls.
-- HIMS: 100% earnings surprise, sold off on legal overhang. Entered at $13.97. +1400% on calls.
-- PLTR: Triangle compression + Iran war tailwind. 6.4R, +850%.
-- PYPL: 7x PE anomaly. Double bottom. LEAPs for position trade.
+- COIN: Entered at $155 key support after platform FUD selloff. +1100% on calls.
+- HIMS: Entered at $13.97 after legal overhang panic. 100% earnings surprise ignored. +1400% on calls.
+- PLTR: Triangle compression at $18 base + Iran war tailwind. 6.4R, +850%.
+- PYPL: 7x PE anomaly at double bottom $55. LEAPs for position trade.
 
-CRITICAL REASONING — stress-test the overhang before building the plan:
-1. Is the selloff rational given actual fundamentals?
-2. Can the stated reason actually impair the business long-term?
-3. Temporary/sentiment overhang + intact fundamentals = HIGH conviction.
+YOUR JOB — find the REAL entry, not just current price:
+1. Look at where price is relative to 52w range and RSI
+2. Identify the most logical entry: support level, base formation, or oversold bounce zone
+3. Entry can be BELOW current price (wait for pullback to support) or AT current price if it's already at a key level
+4. Entry should never be above current price unless it's a breakout setup
+5. Stop goes BELOW the entry level's invalidation point
+6. TPs are realistic targets based on prior structure and fundamental fair value
 
-IMPORTANT: Use ONLY the exact price levels provided. Do not invent or round numbers.
-Respond ONLY with a valid JSON object, no markdown, no backticks.`
+CRITICAL: Stress-test the overhang — is the selloff rational or emotional?
+Respond ONLY with valid JSON, no markdown.`
 
-    const userPrompt = `Analyze ${stock.ticker} and build a trade plan using EXACTLY these levels.
+    const userPrompt = `Build a complete trade plan for ${stock.ticker}.
 
 STOCK: ${stock.ticker} (${stock.name}) | Sector: ${stock.sector} | Archetype: ${stock.archetype}
 
@@ -80,41 +99,48 @@ FUNDAMENTALS:
 - Revenue growth: ${stock.rev_growth}% | Net margin: ${stock.margin}% | ROE: ${stock.roe}%
 - P/E: ${stock.pe}x | Debt/Equity: ${stock.debt_eq}
 
-TECHNICAL:
+PRICE ACTION:
 - Current price: $${price}
-- 52-week high: $${high52} | Distance from high: ${stock.from52h}%
-- RSI: ${stock.rsi} | Volume ratio: ${stock.vol_ratio}x
+- 52-week high: $${high52} | Distance from 52w high: ${stock.from52h}%
+- RSI (price-range proxy): ${stock.rsi} | Volume ratio: ${stock.vol_ratio}x
 - Pattern: ${stock.pattern}
 
-LEVELS (use these exactly):
-- Entry: ~$${price}
-- Stop: $${stopPrice} (${stock.stopPct}% risk)
-- TP1: $${tp1Price} (+8%)
-- TP2: $${tp2Price} (+15%)
-- TP3: $${tp3Price} (${stock.upside}% upside toward 52w high)
-- Est R:R: ${stock.rr}R
+TASK:
+1. Determine the REAL entry price — where does it make sense to enter based on structure?
+   - If RSI < 35 and price is near 52w lows → entry near current price (oversold)
+   - If RSI 35-55 and pulling back → entry at next support below current price
+   - If near highs (RSI > 65) → entry on any pullback to key level
+2. Set stop 4-7% below entry at structural invalidation
+3. Set TP1 at +8-12% from entry, TP2 at +18-25%, TP3 at +35-65% (toward 52w high reclaim)
+4. All prices must be specific dollar amounts
 
 Return ONLY this JSON:
 {
   "overhang_rational": false,
-  "overhang_reasoning": "2-3 sentences stress-testing the selloff",
+  "overhang_reasoning": "2-3 sentences stress-testing the selloff rationale",
   "thesis": "2-3 sentences: fundamentals + overhang resolution + macro tailwind",
-  "overhang_resolution": "why and when this resolves",
-  "entry_logic": "exact chart trigger near $${price}",
-  "entry_price_note": "what $${price} represents technically",
-  "stop_logic": "stop at $${stopPrice} — why this is the invalidation point",
-  "tp1": "$${tp1Price} — why trim here",
-  "tp2": "$${tp2Price} — why trim here",
-  "tp3": "$${tp3Price} — runner target rationale",
+  "overhang_resolution": "why and when this overhang resolves",
+  "entry_price": 123.45,
+  "entry_logic": "why this specific price is the right entry",
+  "entry_price_note": "what this level represents technically (support/base/oversold)",
+  "stop_price": 115.00,
+  "stop_logic": "why this is the invalidation point",
+  "tp1_price": 134.00,
+  "tp1_logic": "why trim here",
+  "tp2_price": 148.00,
+  "tp2_logic": "why trim here",
+  "tp3_price": 175.00,
+  "tp3_logic": "runner target rationale",
+  "rr": 3.2,
   "instrument": "Calls or LEAPs or Stock",
-  "timeframe": "specific timeframe e.g. 2-4 weeks",
+  "timeframe": "specific timeframe e.g. 2-6 weeks",
   "risk_note": "the one thing that invalidates this trade",
   "conviction": "HIGH or MEDIUM or LOW"
 }`
 
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
+      max_tokens: 1200,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
     })
