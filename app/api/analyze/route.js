@@ -72,23 +72,26 @@ export async function POST(req) {
     const high52 = +(price / (1 + stock.from52h / 100)).toFixed(2)
     const low52 = +(high52 * (1 + stock.from52h / 100) * (stock.rsi / 100) * 0.7).toFixed(2)
 
-    const systemPrompt = `You are a senior buy-side equity analyst and trader. Your edge: find fundamentally strong stocks temporarily mispriced by a RESOLVABLE overhang, at a key structural level, with a macro tailwind.
+    const systemPrompt = `You are a senior equity analyst and trader. You identify HIGH CONVICTION setups in both directions — long and short.
 
-Real trades this strategy produced:
-- COIN: Entered at $155 key support after platform FUD selloff. +1100% on calls.
-- HIMS: Entered at $13.97 after legal overhang panic. 100% earnings surprise ignored. +1400% on calls.
-- PLTR: Triangle compression at $18 base + Iran war tailwind. 6.4R, +850%.
-- PYPL: 7x PE anomaly at double bottom $55. LEAPs for position trade.
+BULLISH edge: fundamentally strong stocks mispriced by a resolvable overhang at a key structural level.
+BEARISH edge: overvalued, deteriorating, or news-damaged stocks at distribution tops or breakdown levels.
 
-YOUR JOB — find the REAL entry, not just current price:
-1. Look at where price is relative to 52w range and RSI
-2. Identify the most logical entry: support level, base formation, or oversold bounce zone
-3. Entry can be BELOW current price (wait for pullback to support) or AT current price if it's already at a key level
-4. Entry should never be above current price unless it's a breakout setup
-5. Stop goes BELOW the entry level's invalidation point
-6. TPs are realistic targets based on prior structure and fundamental fair value
+Real trades:
+- COIN long: Entered $155 support after FUD selloff. +1100% on calls.
+- HIMS long: Entered $13.97 on legal panic, 100% EPS surprise ignored. +1400% on calls.
+- PLTR long: Triangle compression + macro tailwind. 6.4R.
+- PYPL long: 7x PE double bottom. LEAPs.
+- Bearish example: Stock at 52w high, PE 80x, revenue decelerating, insider selling — short the breakdown.
 
-CRITICAL: Stress-test the overhang — is the selloff rational or emotional?
+YOUR JOB:
+1. Determine direction: LONG or SHORT based on fundamentals + technicals + news/macro
+2. LONG signals: oversold, strong fundamentals, irrational selloff, resolvable overhang
+3. SHORT signals: overvalued (high PE + decelerating growth), near 52w high with deteriorating fundamentals, negative catalyst (regulation, competition, margin compression), RSI > 70 with weak fundamentals
+4. Find the REAL entry — support for longs, resistance/breakdown for shorts
+5. Stop above entry resistance (shorts) or below entry support (longs)
+6. TPs based on structure and fair value
+
 Respond ONLY with valid JSON, no markdown.`
 
     const userPrompt = `Build a complete trade plan for ${stock.ticker}.
@@ -106,33 +109,44 @@ PRICE ACTION:
 - Pattern: ${stock.pattern}
 
 TASK:
-1. Determine the REAL entry price — where does it make sense to enter based on structure?
-   - If RSI < 35 and price is near 52w lows → entry near current price (oversold)
-   - If RSI 35-55 and pulling back → entry at next support below current price
-   - If near highs (RSI > 65) → entry on any pullback to key level
-2. Set stop 4-7% below entry at structural invalidation
-3. Set TP1 at +8-12% from entry, TP2 at +18-25%, TP3 at +35-65% (toward 52w high reclaim)
-4. All prices must be specific dollar amounts
+1. Determine direction — LONG or SHORT:
+   - SHORT if: RSI > 65 AND (PE > 60 or rev_growth declining) AND near 52w high — stock is extended and fundamentals don't justify valuation
+   - SHORT if: negative catalyst (margin collapse, regulation, losing market share) with stock still elevated
+   - LONG if: RSI < 50, strong fundamentals, oversold or at support, resolvable overhang
+   - LONG if: deeply mispriced relative to earnings power
+
+2. Entry:
+   - LONG: support level, base, or oversold zone — can be at or below current price
+   - SHORT: resistance level, distribution zone, or breakdown confirmation — at or above current price
+
+3. Stop:
+   - LONG: below entry support (4-7% risk)
+   - SHORT: above entry resistance (4-7% risk)
+
+4. TPs (% move from entry in the trade direction):
+   - TP1: +8-12%, TP2: +18-25%, TP3: +35-65%
+   - All prices must be specific dollar amounts
 
 Return ONLY this JSON:
 {
+  "direction": "LONG or SHORT",
   "overhang_rational": false,
-  "overhang_reasoning": "2-3 sentences stress-testing the selloff rationale",
-  "thesis": "2-3 sentences: fundamentals + overhang resolution + macro tailwind",
-  "overhang_resolution": "why and when this overhang resolves",
+  "overhang_reasoning": "2-3 sentences: why is the stock mispriced or overpriced?",
+  "thesis": "2-3 sentences: direction + catalyst + why now",
+  "overhang_resolution": "for longs: what resolves the overhang. for shorts: what triggers the decline",
   "entry_price": 123.45,
   "entry_logic": "why this specific price is the right entry",
-  "entry_price_note": "what this level represents technically (support/base/oversold)",
+  "entry_price_note": "what this level represents (support/resistance/base/breakdown)",
   "stop_price": 115.00,
   "stop_logic": "why this is the invalidation point",
   "tp1_price": 134.00,
-  "tp1_logic": "why trim here",
+  "tp1_logic": "why cover/trim here",
   "tp2_price": 148.00,
-  "tp2_logic": "why trim here",
+  "tp2_logic": "why cover/trim here",
   "tp3_price": 175.00,
-  "tp3_logic": "runner target rationale",
+  "tp3_logic": "runner/full cover target",
   "rr": 3.2,
-  "instrument": "Calls or LEAPs or Stock",
+  "instrument": "Calls/LEAPs/Stock for longs, Puts/Stock short for shorts",
   "timeframe": "specific timeframe e.g. 2-6 weeks",
   "risk_note": "the one thing that invalidates this trade",
   "conviction": "HIGH or MEDIUM or LOW"
