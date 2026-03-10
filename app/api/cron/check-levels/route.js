@@ -1,6 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
 import webpush from 'web-push'
-import { Resend } from 'resend'
 
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
@@ -8,12 +7,10 @@ const supabase = createClient(
 )
 
 webpush.setVapidDetails(
-  'mailto:' + (process.env.RESEND_FROM_EMAIL || 'alerts@jcedge.ai'),
+  'mailto:admin@jcedge.ai',
   process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
   process.env.VAPID_PRIVATE_KEY
 )
-
-const resend = new Resend(process.env.RESEND_API_KEY)
 
 async function getPrice(ticker) {
   try {
@@ -34,7 +31,7 @@ export async function GET(req) {
 
   const { data: plans } = await supabase
     .from('followed_plans')
-    .select('*, profiles(email, username)')
+    .select('*')
     .eq('active', true)
 
   if (!plans?.length) return Response.json({ checked: 0 })
@@ -74,42 +71,17 @@ export async function GET(req) {
       .eq('user_id', plan.user_id)
       .single()
 
-    const userEmail = plan.profiles?.email
-    const username = plan.profiles?.username || 'Trader'
-
     for (const alert of newAlerts) {
-      const title = `${alert.emoji} ${plan.ticker} hit ${alert.label}`
-      const body = `$${plan.ticker} @ $${price.toFixed(2)} — ${alert.label} at $${alert.price} reached`
+      const title = `${alert.emoji} ${plan.ticker} — ${alert.label} Hit`
+      const body = `$${plan.ticker} @ $${price.toFixed(2)} · ${alert.label} at $${alert.price}`
 
       if (pushSub?.subscription) {
         try {
-          await webpush.sendNotification(JSON.parse(pushSub.subscription), JSON.stringify({ title, body, url: '/dashboard' }))
+          await webpush.sendNotification(
+            JSON.parse(pushSub.subscription),
+            JSON.stringify({ title, body, url: '/dashboard' })
+          )
         } catch (e) { console.error('Push failed:', e.message) }
-      }
-
-      if (userEmail) {
-        try {
-          await resend.emails.send({
-            from: process.env.RESEND_FROM_EMAIL || 'alerts@jcedge.ai',
-            to: userEmail,
-            subject: title,
-            html: `<div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
-              <div style="font-size:22px;font-weight:700;margin-bottom:4px">${alert.emoji} ${plan.ticker} — ${alert.label} Hit</div>
-              <div style="color:#6b7280;font-size:14px;margin-bottom:20px">JCedge.ai Alert for ${username}</div>
-              <div style="background:#f9fafb;border-radius:10px;padding:16px;margin-bottom:16px">
-                <div style="font-size:28px;font-weight:700;color:#111">$${price.toFixed(2)}</div>
-                <div style="color:#6b7280;font-size:13px">${plan.ticker} current price</div>
-              </div>
-              <table style="width:100%;font-size:13px;margin-bottom:20px">
-                <tr><td style="color:#6b7280;padding:4px 0">Level hit</td><td style="font-weight:600">${alert.label} @ $${alert.price}</td></tr>
-                <tr><td style="color:#6b7280;padding:4px 0">Stop loss</td><td style="color:#ef4444">$${plan.stop}</td></tr>
-                <tr><td style="color:#6b7280;padding:4px 0">Remaining TPs</td><td>${[plan.tp1,plan.tp2,plan.tp3].filter(Boolean).map(t=>'$'+t).join(' · ')}</td></tr>
-              </table>
-              <a href="https://jcedge.ai/dashboard" style="background:#111;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;font-size:14px">Open Dashboard</a>
-              <div style="margin-top:24px;font-size:11px;color:#9ca3af">JCedge.ai · Private trading intelligence</div>
-            </div>`
-          })
-        } catch (e) { console.error('Email failed:', e.message) }
       }
 
       await supabase.from('notifications').insert({
