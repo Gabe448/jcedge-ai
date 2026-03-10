@@ -156,43 +156,89 @@ const FUNDAMENTALS = {
 }
 
 function scoreStock(s) {
+  // ── LONG SCORING ──────────────────────────────────────────
   let fund = 0
   if (s.eps_beat > 15) fund += 10; else if (s.eps_beat > 5) fund += 6; else if (s.eps_beat > 0) fund += 3
   if (s.rev_growth > 20) fund += 8; else if (s.rev_growth > 10) fund += 5; else if (s.rev_growth > 0) fund += 2
   if (s.margin > 20) fund += 7; else if (s.margin > 10) fund += 4; else if (s.margin > 0) fund += 1
   if (s.roe > 20) fund += 5
-  const fundamentals = Math.min(fund, 30)
+  const longFund = Math.min(fund, 30)
 
   let mac = 0
   if (s.rev_growth > 30) mac += 20; else if (s.rev_growth > 15) mac += 15; else if (s.rev_growth > 5) mac += 10; else mac += 5
-  const macro = Math.min(mac, 25)
+  const longMacro = Math.min(mac, 25)
 
   let mis = 0
   if (s.from52h < -15) mis += 10
   if (s.from52h < -30) mis += 5
   if (s.from52h < -10 && s.rev_growth > 10) mis += 8
   if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) mis += 7
-  const mispricing = Math.min(mis, 25)
+  const longMispricing = Math.min(mis, 25)
 
   let tech = 0
   if (s.rsi > 35 && s.rsi < 60) tech += 8
-  if (s.rsi < 35) tech += 5
+  if (s.rsi < 35) tech += 5  // oversold
   if (s.vol_ratio > 1.5) tech += 6
   if (s.vol_ratio > 2.0) tech += 6
-  const technical = Math.min(tech, 20)
+  const longTech = Math.min(tech, 20)
 
-  const score = fundamentals + macro + mispricing + technical
+  const longScore = longFund + longMacro + longMispricing + longTech
+
+  // ── SHORT SCORING ─────────────────────────────────────────
+  let sFund = 0
+  if (s.rev_growth < 0) sFund += 10; else if (s.rev_growth < 5) sFund += 5
+  if (s.margin < 0) sFund += 10; else if (s.margin < 5) sFund += 5
+  if (s.pe > 60 && s.rev_growth < 20) sFund += 10  // expensive + slowing
+  if (s.pe > 100) sFund += 5
+  const shortFund = Math.min(sFund, 30)
+
+  let sVal = 0
+  if (s.from52h > -10 && s.pe > 50) sVal += 15  // near highs + expensive
+  if (s.from52h > -5) sVal += 10                  // basically at highs
+  if (s.pe > 80 && s.rev_growth < 30) sVal += 10  // PE not justified
+  const shortOverval = Math.min(sVal, 25)
+
+  let sTech = 0
+  if (s.rsi > 70) sTech += 15   // overbought
+  if (s.rsi > 80) sTech += 10   // extremely overbought
+  if (s.vol_ratio > 2.0 && s.rsi > 65) sTech += 5  // volume at top
+  const shortTech = Math.min(sTech, 25)
+
+  let sMom = 0
+  if (s.from52h > -8 && s.rsi > 65) sMom += 20  // extended at highs
+  const shortMom = Math.min(sMom, 20)
+
+  const shortScore = shortFund + shortOverval + shortTech + shortMom
+
+  // ── DETERMINE DIRECTION ───────────────────────────────────
+  const isShort = shortScore > longScore && shortScore > 40
+  const score = isShort ? shortScore : longScore
+  const direction = isShort ? 'short' : 'long'
 
   let archetype = 'catalyst_surprise'
-  if (s.from52h < -15 && s.rev_growth > 10) archetype = 'earnings_mispricing'
-  else if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) archetype = 'deep_value'
-  else if (s.rev_growth > 25 && s.rsi < 60) archetype = 'macro_pattern'
+  if (isShort) {
+    if (s.pe > 80 && s.rev_growth < 20) archetype = 'deep_value'  // reuse as overvalued
+    else if (s.rsi > 75) archetype = 'macro_pattern'
+    else archetype = 'earnings_mispricing'
+  } else {
+    if (s.from52h < -15 && s.rev_growth > 10) archetype = 'earnings_mispricing'
+    else if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) archetype = 'deep_value'
+    else if (s.rev_growth > 25 && s.rsi < 60) archetype = 'macro_pattern'
+  }
 
-  const upside = Math.abs(s.from52h) * 0.65
-  const stopPct = s.rsi < 40 ? 4 : 6
+  const upside = isShort
+    ? Math.min(Math.abs(s.from52h) + 20, 60)  // short downside estimate
+    : Math.abs(s.from52h) * 0.65
+  const stopPct = s.rsi < 40 || s.rsi > 70 ? 4 : 6
   const rr = stopPct > 0 ? +(upside / stopPct).toFixed(1) : 0
 
-  return { ...s, score, breakdown: { fundamentals, macro, mispricing, technical }, archetype, upside: +upside.toFixed(1), stopPct, rr }
+  return {
+    ...s, score, direction,
+    breakdown: isShort
+      ? { fundamentals: shortFund, macro: shortMom, mispricing: shortOverval, technical: shortTech }
+      : { fundamentals: longFund, macro: longMacro, mispricing: longMispricing, technical: longTech },
+    archetype, upside: +upside.toFixed(1), stopPct, rr
+  }
 }
 
 async function fetchQuote(ticker) {
