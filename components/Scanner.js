@@ -248,6 +248,7 @@ function PlanModal({ stock, onClose, userId }) {
               <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 16, color: '#374151', fontWeight: 600 }}>${stock.price}</span>
               <Tag {...arch} />
               {plan && <span style={{ fontSize: 10, fontWeight: 500, color: CONV[plan.conviction]?.color, background: CONV[plan.conviction]?.bg, padding: '2px 7px', borderRadius: 4 }}>{plan.conviction}</span>}
+              {plan?.direction && <span style={{ fontSize: 10, fontWeight: 700, color: plan.direction === 'SHORT' ? '#ef4444' : '#059669', background: plan.direction === 'SHORT' ? '#fff5f5' : '#f0fdf4', border: '1px solid ' + (plan.direction === 'SHORT' ? '#fee2e2' : '#bbf7d0'), padding: '2px 7px', borderRadius: 4 }}>{plan.direction}</span>}
             </div>
             {plan && <FollowButton stock={stock} plan={plan} userId={userId} />}
             <div style={{ display: 'none' }}>
