@@ -194,15 +194,15 @@ function FollowButton({ stock, plan, userId }) {
   const toggle = async () => {
     if (!userId) return
     setLoading(true)
-    const entry = +(stock.price).toFixed(2)
-    const stop = +(stock.price * (1 - stock.stopPct / 100)).toFixed(2)
-    const tp1 = +(stock.price * 1.08).toFixed(2)
-    const tp2 = +(stock.price * 1.15).toFixed(2)
-    const tp3 = +(stock.price * (1 + stock.upside / 100)).toFixed(2)
+    const entry = plan?.entry_price || +(stock.price).toFixed(2)
+    const stop = plan?.stop_price || +(stock.price * (1 - stock.stopPct / 100)).toFixed(2)
+    const tp1 = plan?.tp1_price || +(stock.price * 1.08).toFixed(2)
+    const tp2 = plan?.tp2_price || +(stock.price * 1.15).toFixed(2)
+    const tp3 = plan?.tp3_price || +(stock.price * (1 + stock.upside / 100)).toFixed(2)
     const res = await fetch('/api/follow', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ user_id: userId, ticker: stock.ticker, entry, stop, tp1, tp2, tp3, active: true })
+      body: JSON.stringify({ user_id: userId, ticker: stock.ticker, entry, stop, tp1, tp2, tp3, active: true, plan_data: plan })
     })
     const data = await res.json()
     setFollowing(data.following)
@@ -229,7 +229,7 @@ function PlanModal({ stock, onClose, userId }) {
     fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(stock)
+      body: JSON.stringify({ ...stock, user_id: userId })
     })
       .then(r => r.json())
       .then(p => { setPlan(p); setLoading(false) })
@@ -289,17 +289,19 @@ function PlanModal({ stock, onClose, userId }) {
               </div>
               <div style={{ background: '#f8fafc', borderRadius: 8, padding: '12px 14px' }}>
                 <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 5 }}>Entry trigger</div>
+                {plan.entry_price && <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 16, fontWeight: 700, color: '#eab308', marginBottom: 4 }}>${plan.entry_price}</div>}
                 <div style={{ fontSize: 13, color: '#111', lineHeight: 1.55, marginBottom: 4 }}>{plan.entry_logic}</div>
                 <div style={{ fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>{plan.entry_price_note}</div>
               </div>
               <div style={{ background: '#fff5f5', border: '1px solid #fee2e2', borderRadius: 8, padding: '11px 13px' }}>
-                <div style={{ fontSize: 10, color: '#ef4444', textTransform: 'uppercase', marginBottom: 4 }}>Stop loss · ~{stock.stopPct}% risk</div>
+                <div style={{ fontSize: 10, color: '#ef4444', textTransform: 'uppercase', marginBottom: 4 }}>Stop loss{plan.stop_price && <span> · ${plan.stop_price}</span>}</div>
                 <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.55 }}>{plan.stop_logic}</div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                {[['TP1 — Trim ⅓', plan.tp1], ['TP2 — Trim ⅓', plan.tp2], ['TP3 — Runner', plan.tp3]].map(([l, v]) => (
+                {[['TP1 — Trim ⅓', plan.tp1_price, plan.tp1_logic], ['TP2 — Trim ⅓', plan.tp2_price, plan.tp2_logic], ['TP3 — Runner', plan.tp3_price, plan.tp3_logic]].map(([l, p, v]) => (
                   <div key={l} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 11px' }}>
                     <div style={{ fontSize: 9, color: '#6b7280', textTransform: 'uppercase', marginBottom: 3 }}>{l}</div>
+                    {p && <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 13, fontWeight: 700, color: '#059669', marginBottom: 2 }}>${p}</div>}
                     <div style={{ fontSize: 11, color: '#059669', lineHeight: 1.4 }}>{v}</div>
                   </div>
                 ))}
