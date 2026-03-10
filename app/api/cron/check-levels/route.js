@@ -49,12 +49,14 @@ export async function GET(req) {
     const notified = plan.notified_levels || []
     const newAlerts = []
 
+    // Use plan_data prices if available (new format), fallback to direct fields
+    const pd = plan.plan_data || {}
     const levels = [
-      { key: 'entry', price: plan.entry, label: 'Entry', emoji: '🟡', direction: 'below' },
-      { key: 'tp1',   price: plan.tp1,   label: 'TP1',   emoji: '🟢', direction: 'above' },
-      { key: 'tp2',   price: plan.tp2,   label: 'TP2',   emoji: '🟢', direction: 'above' },
-      { key: 'tp3',   price: plan.tp3,   label: 'TP3',   emoji: '🟢', direction: 'above' },
-      { key: 'stop',  price: plan.stop,  label: 'Stop',  emoji: '🔴', direction: 'below' },
+      { key: 'entry', price: pd.entry_price || plan.entry, label: 'Entry', emoji: '🟡', direction: 'below' },
+      { key: 'tp1',   price: pd.tp1_price   || plan.tp1,   label: 'TP1',   emoji: '🟢', direction: 'above' },
+      { key: 'tp2',   price: pd.tp2_price   || plan.tp2,   label: 'TP2',   emoji: '🟢', direction: 'above' },
+      { key: 'tp3',   price: pd.tp3_price   || plan.tp3,   label: 'TP3',   emoji: '🟢', direction: 'above' },
+      { key: 'stop',  price: pd.stop_price  || plan.stop,  label: 'Stop',  emoji: '🔴', direction: 'below' },
     ]
 
     for (const level of levels) {
@@ -98,8 +100,13 @@ export async function GET(req) {
     }
 
     if (newAlerts.length) {
+      const hitKeys = newAlerts.map(a => a.key)
+      const isDone = hitKeys.includes('stop') || hitKeys.includes('tp3')
       await supabase.from('followed_plans')
-        .update({ notified_levels: [...notified, ...newAlerts.map(a => a.key)] })
+        .update({
+          notified_levels: [...notified, ...hitKeys],
+          active: isDone ? false : true
+        })
         .eq('id', plan.id)
     }
   }
