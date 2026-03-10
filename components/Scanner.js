@@ -2,6 +2,23 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 
+
+async function registerPush(userId) {
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js')
+    const existing = await reg.pushManager.getSubscription()
+    const sub = existing || await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    })
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub, user_id: userId })
+    })
+  } catch (e) { console.error('Push registration failed:', e) }
+}
+
 const C = {
   catalyst_surprise:   { label: 'Catalyst Surprise',   color: '#2563eb', bg: '#eff6ff' },
   earnings_mispricing: { label: 'Earnings Mispricing', color: '#059669', bg: '#ecfdf5' },
@@ -162,7 +179,46 @@ function _OldLevelChart({ stock }) {
   )
 }
 
-function PlanModal({ stock, onClose }) {
+
+function FollowButton({ stock, plan, userId }) {
+  const [following, setFollowing] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!userId || !stock.ticker) return
+    fetch(`/api/follow?user_id=${userId}`)
+      .then(r => r.json())
+      .then(d => setFollowing((d.following || []).includes(stock.ticker)))
+  }, [stock.ticker, userId])
+
+  const toggle = async () => {
+    if (!userId) return
+    setLoading(true)
+    const entry = +(stock.price).toFixed(2)
+    const stop = +(stock.price * (1 - stock.stopPct / 100)).toFixed(2)
+    const tp1 = +(stock.price * 1.08).toFixed(2)
+    const tp2 = +(stock.price * 1.15).toFixed(2)
+    const tp3 = +(stock.price * (1 + stock.upside / 100)).toFixed(2)
+    const res = await fetch('/api/follow', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, ticker: stock.ticker, entry, stop, tp1, tp2, tp3, active: true })
+    })
+    const data = await res.json()
+    setFollowing(data.following)
+    if (data.following) registerPush(userId)
+    setLoading(false)
+  }
+
+  return (
+    <button onClick={toggle} disabled={loading}
+      style={{ background: following ? '#ecfdf5' : '#111', color: following ? '#059669' : '#fff', border: following ? '1px solid #bbf7d0' : 'none', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer', opacity: loading ? 0.6 : 1 }}>
+      {loading ? '...' : following ? '✓ Following' : '+ Follow & Alert'}
+    </button>
+  )
+}
+
+function PlanModal({ stock, onClose, userId }) {
   const [plan, setPlan] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -192,6 +248,9 @@ function PlanModal({ stock, onClose }) {
               <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 16, color: '#374151', fontWeight: 600 }}>${stock.price}</span>
               <Tag {...arch} />
               {plan && <span style={{ fontSize: 10, fontWeight: 500, color: CONV[plan.conviction]?.color, background: CONV[plan.conviction]?.bg, padding: '2px 7px', borderRadius: 4 }}>{plan.conviction}</span>}
+            </div>
+            {plan && <FollowButton stock={stock} plan={plan} userId={userId} />}
+            <div style={{ display: 'none' }}>
             </div>
             <div style={{ fontSize: 11, color: '#94a3b8' }}>{stock.name} · {stock.sector} · Score {stock.score}/100 · ~{stock.rr}R</div>
           </div>
@@ -334,7 +393,7 @@ export default function Scanner() {
 
   return (
     <div>
-      {expanded && <PlanModal stock={expanded} onClose={() => setExpanded(null)} />}
+      {expanded && <PlanModal stock={expanded} onClose={() => setExpanded(null)} userId={profile?.id} />}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
         <div>
