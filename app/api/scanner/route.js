@@ -98,7 +98,7 @@ const FUNDAMENTALS = {
   SCHW: { name:'Charles Schwab Corp.',             sector:'Financials',       pe:28,  rev_growth:6,   margin:22, roe:12,  debt_eq:0.55 },
   AXP:  { name:'American Express Co.',             sector:'Financials',       pe:18,  rev_growth:10,  margin:18, roe:33,  debt_eq:1.77 },
   SPGI: { name:'S&P Global Inc.',                  sector:'Financials',       pe:45,  rev_growth:12,  margin:32, roe:22,  debt_eq:0.88 },
-  MCO:  { name:'Moody's Corporation',             sector:'Financials',       pe:40,  rev_growth:10,  margin:30, roe:88,  debt_eq:2.20 },
+  MCO:  { name:'Moodys Corporation',             sector:'Financials',       pe:40,  rev_growth:10,  margin:30, roe:88,  debt_eq:2.20 },
   COF:  { name:'Capital One Financial Corp.',      sector:'Financials',       pe:12,  rev_growth:6,   margin:18, roe:10,  debt_eq:0.77 },
   AMT:  { name:'American Tower Corp.',             sector:'Real Estate',      pe:44,  rev_growth:4,   margin:18, roe:22,  debt_eq:3.30 },
   PLD:  { name:'Prologis Inc.',                    sector:'Real Estate',      pe:38,  rev_growth:8,   margin:44, roe:8,   debt_eq:0.66 },
