@@ -8,12 +8,14 @@ import TradePlans from '../../components/TradePlans'
 import Portfolio from '../../components/Portfolio'
 import Chat from '../../components/Chat'
 import AdminPanel from '../../components/AdminPanel'
+import Profile from '../../components/Profile'
 
 const NAV = [
   { id: 'scanner',   label: 'Scanner' },
   { id: 'plans',     label: 'Plans' },
   { id: 'portfolio', label: 'Portfolio' },
   { id: 'chat',      label: 'Room' },
+  { id: 'profile',   label: 'Profile' },
 ]
 
 // Ticker tape data (static for now — can be made live later)
@@ -197,6 +199,7 @@ export default function Dashboard() {
         {tab === 'plans'     && <TradePlans profile={profile} />}
         {tab === 'portfolio' && <Portfolio  user={user} profile={profile} />}
         {tab === 'chat'      && <Chat       profile={profile} />}
+        {tab === 'profile'  && <Profile     profile={profile} onProfileUpdate={setProfile} />}
       </div>
 
       {/* ── MOBILE BOTTOM NAV ──────────────── */}
