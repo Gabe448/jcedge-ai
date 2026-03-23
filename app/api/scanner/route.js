@@ -499,28 +499,29 @@ async function fetchLiveFundamentals(tickers) {
 
 async function fetchBatchPrices(tickers) {
   const results = {}
+  // Use v8 chart endpoint per ticker in parallel batches of 15
   const batches = []
-  for (let i = 0; i < tickers.length; i += 20) batches.push(tickers.slice(i, i + 20))
+  for (let i = 0; i < tickers.length; i += 15) batches.push(tickers.slice(i, i + 15))
 
   await Promise.all(batches.map(async batch => {
-    try {
-      const symbols = batch.join(',')
-      const res = await fetch(
-        `https://query2.finance.yahoo.com/v7/finance/quote?symbols=${symbols}&fields=regularMarketPrice,fiftyTwoWeekHigh,regularMarketVolume,averageVolume,regularMarketChangePercent`,
-        { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(8000) }
-      )
-      const data = await res.json()
-      const quotes = data?.quoteResponse?.result || []
-      for (const q of quotes) {
-        results[q.symbol] = {
-          price:       +(q.regularMarketPrice || 0).toFixed(2),
-          high52:      +(q.fiftyTwoWeekHigh || 0).toFixed(2),
-          volume:      q.regularMarketVolume || 0,
-          avg_volume:  q.averageVolume || 1,
-          change_pct:  +(q.regularMarketChangePercent || 0).toFixed(2),
+    await Promise.all(batch.map(async ticker => {
+      try {
+        const res = await fetch(
+          `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=2d`,
+          { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(6000) }
+        )
+        const data = await res.json()
+        const meta = data?.chart?.result?.[0]?.meta
+        if (!meta) return
+        results[ticker] = {
+          price:      +(meta.regularMarketPrice || 0).toFixed(2),
+          high52:     +(meta.fiftyTwoWeekHigh || 0).toFixed(2),
+          volume:     meta.regularMarketVolume || 0,
+          avg_volume: meta.averageDailyVolume3Month || meta.averageDailyVolume10Day || 1,
+          change_pct: +(((meta.regularMarketPrice - meta.chartPreviousClose) / meta.chartPreviousClose) * 100 || 0).toFixed(2),
         }
-      }
-    } catch {}
+      } catch {}
+    }))
   }))
   return results
 }
