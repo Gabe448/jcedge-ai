@@ -497,6 +497,68 @@ async function fetchLiveFundamentals(tickers) {
   return results
 }
 
+// Fetch 60d OHLCV for real TA calculations
+async function fetchTA(tickers) {
+  const results = {}
+  const batches = []
+  for (let i = 0; i < tickers.length; i += 10) batches.push(tickers.slice(i, i + 10))
+
+  await Promise.all(batches.map(async batch => {
+    await Promise.all(batch.map(async ticker => {
+      try {
+        const res = await fetch(
+          `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=90d`,
+          { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(6000) }
+        )
+        const data = await res.json()
+        const result = data?.chart?.result?.[0]
+        if (!result) return
+
+        const closes  = result.indicators?.quote?.[0]?.close?.filter(p => p != null) || []
+        const volumes = result.indicators?.quote?.[0]?.volume?.filter(v => v != null) || []
+        if (closes.length < 20) return
+
+        const rsi   = calcRSI(closes)
+        const ma20  = closes.slice(-20).reduce((a,b) => a+b,0) / 20
+        const ma50  = closes.length >= 50 ? closes.slice(-50).reduce((a,b) => a+b,0) / 50 : null
+        const price = closes[closes.length - 1]
+        const aboveMa20 = price > ma20
+        const aboveMa50 = ma50 ? price > ma50 : null
+        const ma20Pct = +((price / ma20 - 1) * 100).toFixed(1)
+        const ma50Pct = ma50 ? +((price / ma50 - 1) * 100).toFixed(1) : 0
+
+        const ma20Prev = closes.slice(-21,-1).reduce((a,b) => a+b,0) / 20
+        const ma50Prev = closes.length >= 51 ? closes.slice(-51,-1).reduce((a,b) => a+b,0) / 50 : null
+        const goldenCross = !!(ma50Prev && ma20Prev < ma50Prev && ma20 > (ma50 || 0))
+        const deathCross  = !!(ma50Prev && ma20Prev > ma50Prev && ma20 < (ma50 || 0))
+
+        const vol5     = volumes.slice(-5).reduce((a,b) => a+b,0) / 5
+        const vol20    = volumes.slice(-20).reduce((a,b) => a+b,0) / 20
+        const volTrend = vol20 > 0 ? +(vol5 / vol20).toFixed(2) : 1
+
+        const mom5  = closes.length >= 6  ? (closes[closes.length-1]/closes[closes.length-6]  - 1)*100 : 0
+        const mom20 = closes.length >= 21 ? (closes[closes.length-1]/closes[closes.length-21] - 1)*100 : 0
+
+        const recent       = closes.slice(-20)
+        const recentHigh   = Math.max(...recent)
+        const recentLow    = Math.min(...recent)
+        const compression  = (recentHigh - recentLow) / recentHigh
+        const isConsolidating = compression < 0.06
+        const isBreakingOut   = price > recentHigh * 0.98 && volTrend > 1.3
+        const isBreakingDown  = price < recentLow  * 1.02 && volTrend > 1.3
+        const bullishDiv      = price < recentLow * 1.02 && rsi > 35
+
+        results[ticker] = {
+          rsi, ma20Pct, ma50Pct, aboveMa20, aboveMa50,
+          goldenCross, deathCross, volTrend, mom5, mom20,
+          isConsolidating, isBreakingOut, isBreakingDown, bullishDiv,
+        }
+      } catch {}
+    }))
+  }))
+  return results
+}
+
 async function fetchBatchPrices(tickers) {
   const results = {}
   // Use v8 chart endpoint per ticker in parallel batches of 15
@@ -543,6 +605,7 @@ function calcRSI(prices, period = 14) {
 
 function scoreStock(s) {
   // ── LONG SCORING ──────────────────────────────────────────
+  // Fundamentals /30
   let fund = 0
   if (s.rev_growth > 20) fund += 8; else if (s.rev_growth > 10) fund += 5; else if (s.rev_growth > 0) fund += 2
   if (s.margin > 20) fund += 7; else if (s.margin > 10) fund += 4; else if (s.margin > 0) fund += 1
@@ -551,28 +614,41 @@ function scoreStock(s) {
   if (s.debt_eq < 0.5) fund += 5
   const longFund = Math.min(fund, 30)
 
+  // Macro/momentum /25
   let mac = 0
-  if (s.rev_growth > 30) mac += 20; else if (s.rev_growth > 15) mac += 15; else if (s.rev_growth > 5) mac += 10; else mac += 5
+  if (s.rev_growth > 30) mac += 12; else if (s.rev_growth > 15) mac += 8; else if (s.rev_growth > 5) mac += 5
+  if (s.mom20 < -10) mac += 8   // sold off hard = potential opportunity
+  else if (s.mom20 < -5) mac += 4
+  if (s.mom5 > 2 && s.mom20 < 0) mac += 5  // starting to turn after selloff
   const longMacro = Math.min(mac, 25)
 
+  // Mispricing /25
   let mis = 0
   if (s.from52h < -15) mis += 10
   if (s.from52h < -30) mis += 5
   if (s.from52h < -10 && s.rev_growth > 10) mis += 8
   if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) mis += 7
+  if (s.bullishDiv) mis += 5   // RSI divergence = hidden strength
   const longMispricing = Math.min(mis, 25)
 
+  // Technical /20 — uses real TA
   let tech = 0
-  if (s.rsi > 35 && s.rsi < 55) tech += 8
-  if (s.rsi < 35) tech += 10  // oversold
-  if (s.rsi < 25) tech += 5   // extremely oversold
-  if (s.vol_ratio > 1.5) tech += 6
-  if (s.vol_ratio > 2.0) tech += 6
+  if (s.rsi < 30) tech += 10        // extremely oversold
+  else if (s.rsi < 40) tech += 7    // oversold
+  else if (s.rsi < 55) tech += 4    // neutral/pullback
+  if (s.aboveMa20) tech += 3        // above 20MA = trend intact
+  if (s.aboveMa50) tech += 3        // above 50MA = bullish structure
+  if (s.goldenCross) tech += 4      // MA crossover signal
+  if (s.isConsolidating) tech += 3  // tight base = coiled spring
+  if (s.isBreakingOut) tech += 5    // breaking out with volume
+  if (s.volTrend > 1.5) tech += 3   // rising volume
+  if (s.volTrend > 2.0) tech += 2
   const longTech = Math.min(tech, 20)
 
   const longScore = longFund + longMacro + longMispricing + longTech
 
   // ── SHORT SCORING ─────────────────────────────────────────
+  // Weak fundamentals /30
   let sFund = 0
   if (s.rev_growth < 0) sFund += 10; else if (s.rev_growth < 5) sFund += 5
   if (s.margin < 0) sFund += 10; else if (s.margin < 5) sFund += 5
@@ -580,46 +656,77 @@ function scoreStock(s) {
   if (s.pe > 100) sFund += 5
   const shortFund = Math.min(sFund, 30)
 
+  // Overvaluation /25
   let sVal = 0
   if (s.from52h > -8 && s.pe > 50) sVal += 15
   if (s.from52h > -5) sVal += 10
   if (s.pe > 80 && s.rev_growth < 30) sVal += 10
+  if (s.mom20 > 15 && s.pe > 40) sVal += 5  // extended run on weak fundamentals
   const shortOverval = Math.min(sVal, 25)
 
+  // Technical deterioration /25
   let sTech = 0
-  if (s.rsi > 70) sTech += 15
-  if (s.rsi > 80) sTech += 10
-  if (s.vol_ratio > 2.0 && s.rsi > 65) sTech += 5
+  if (s.rsi > 75) sTech += 12
+  else if (s.rsi > 65) sTech += 7
+  if (!s.aboveMa20) sTech += 4      // broke below 20MA
+  if (!s.aboveMa50) sTech += 4      // broke below 50MA
+  if (s.deathCross) sTech += 5      // death cross = trend reversal
+  if (s.isBreakingDown) sTech += 6  // breaking down with volume
+  if (s.volTrend > 1.5 && s.rsi > 65) sTech += 3  // high volume at top
   const shortTech = Math.min(sTech, 25)
 
+  // Momentum exhaustion /20
   let sMom = 0
-  if (s.from52h > -8 && s.rsi > 65) sMom += 20
+  if (s.from52h > -8 && s.rsi > 65) sMom += 10
+  if (s.mom5 < -3 && s.mom20 > 10) sMom += 8   // starting to roll over
+  if (s.mom20 > 25) sMom += 5                    // extremely extended
   const shortMom = Math.min(sMom, 20)
 
   const shortScore = shortFund + shortOverval + shortTech + shortMom
 
   const isShort = shortScore > longScore && shortScore > 40
-  const score = isShort ? shortScore : longScore
+  const score   = isShort ? shortScore : longScore
   const direction = isShort ? 'short' : 'long'
 
+  // Archetype
   let archetype = 'catalyst_surprise'
   if (isShort) {
     if (s.pe > 80 && s.rev_growth < 20) archetype = 'deep_value'
-    else if (s.rsi > 75) archetype = 'macro_pattern'
+    else if (s.rsi > 75 || s.isBreakingDown) archetype = 'macro_pattern'
     else archetype = 'earnings_mispricing'
   } else {
     if (s.from52h < -15 && s.rev_growth > 10) archetype = 'earnings_mispricing'
     else if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) archetype = 'deep_value'
+    else if (s.goldenCross || s.isBreakingOut) archetype = 'macro_pattern'
     else if (s.rev_growth > 25 && s.rsi < 60) archetype = 'macro_pattern'
   }
 
-  const upside = isShort ? Math.min(Math.abs(s.from52h) + 20, 60) : Math.abs(s.from52h) * 0.65
-  const stopPct = s.rsi < 40 || s.rsi > 70 ? 4 : 6
-  const rr = stopPct > 0 ? +(upside / stopPct).toFixed(1) : 0
+  const upside  = isShort ? Math.min(Math.abs(s.from52h) + 20, 60) : Math.abs(s.from52h) * 0.65
+  const stopPct = s.rsi < 35 || s.rsi > 72 ? 4 : 6
+  const rr      = stopPct > 0 ? +(upside / stopPct).toFixed(1) : 0
 
-  const pattern = isShort
-    ? `${s.rsi > 70 ? 'Overbought' : 'Extended'} · RSI ${s.rsi} · ${Math.abs(s.from52h)}% from 52w high`
-    : `${s.rsi < 35 ? 'Oversold bounce' : s.rsi < 50 ? 'Deep pullback' : 'Setup'} · RSI ${s.rsi}${s.vol_ratio > 1.5 ? ' · High volume' : ''}`
+  // Pattern description using real TA
+  let patternParts = []
+  if (isShort) {
+    if (s.rsi > 75) patternParts.push('Extremely overbought')
+    else if (s.rsi > 65) patternParts.push('Overbought')
+    if (s.deathCross) patternParts.push('Death cross')
+    if (s.isBreakingDown) patternParts.push('Breaking down on volume')
+    if (s.mom5 < -3) patternParts.push('Rolling over')
+    patternParts.push(`RSI ${s.rsi}`)
+  } else {
+    if (s.rsi < 30) patternParts.push('Extremely oversold')
+    else if (s.rsi < 40) patternParts.push('Oversold')
+    else if (s.isConsolidating) patternParts.push('Tight base / coiling')
+    if (s.goldenCross) patternParts.push('Golden cross')
+    if (s.isBreakingOut) patternParts.push('Breaking out')
+    if (s.bullishDiv) patternParts.push('Bullish RSI divergence')
+    if (s.aboveMa20 && s.aboveMa50) patternParts.push('Above both MAs')
+    else if (!s.aboveMa20) patternParts.push('Below 20MA')
+    patternParts.push(`RSI ${s.rsi}`)
+    if (s.volTrend > 1.5) patternParts.push('High volume')
+  }
+  const pattern = patternParts.slice(0,3).join(' · ')
 
   return {
     ...s, score, direction,
@@ -635,7 +742,11 @@ export async function GET() {
     // Step 1: fetch live prices for all tickers
     const priceData = await fetchBatchPrices(ALL_TICKERS)
 
-    // Step 2: find tickers needing live fundamentals
+    // Step 2: fetch real TA for all tickers with price data
+    const hasPrices = ALL_TICKERS.filter(t => priceData[t]?.price > 0)
+    const taData = await fetchTA(hasPrices)
+
+    // Step 3: find tickers needing live fundamentals
     const needLive = ALL_TICKERS.filter(t => !HARDCODED[t] && priceData[t]?.price > 0)
 
     // Step 3: fetch live fundamentals for unknown tickers (in parallel, best effort)
@@ -668,19 +779,35 @@ export async function GET() {
       // Approximate RSI from price position in 52w range (rough proxy without full OHLCV)
       const rsi = pd.high52 > 0 ? Math.round(30 + ((pd.price / pd.high52) * 70)) : 50
 
+      const ta = taData[ticker] || {}
+      const realRsi = ta.rsi || rsi  // use real RSI if available
       const stock = {
         ticker, name, sector,
         price: pd.price,
         high52: pd.high52,
         from52h,
         vol_ratio,
-        rsi,
+        rsi: realRsi,
         change_pct: pd.change_pct,
         pe:         fund.pe,
         rev_growth: fund.rev_growth,
         margin:     fund.margin,
         roe:        fund.roe,
         debt_eq:    fund.debt_eq,
+        // real TA fields
+        ma20Pct:       ta.ma20Pct       || 0,
+        ma50Pct:       ta.ma50Pct       || 0,
+        aboveMa20:     ta.aboveMa20     ?? true,
+        aboveMa50:     ta.aboveMa50     ?? true,
+        goldenCross:   ta.goldenCross   || false,
+        deathCross:    ta.deathCross    || false,
+        volTrend:      ta.volTrend      || vol_ratio,
+        mom5:          ta.mom5          || 0,
+        mom20:         ta.mom20         || 0,
+        isConsolidating: ta.isConsolidating || false,
+        isBreakingOut:   ta.isBreakingOut   || false,
+        isBreakingDown:  ta.isBreakingDown  || false,
+        bullishDiv:      ta.bullishDiv      || false,
       }
 
       stocks.push(scoreStock(stock))
