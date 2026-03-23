@@ -259,7 +259,7 @@ function PlanModal({ stock, onClose, userId }) {
   )
 }
 
-const CACHE_TTL = 24 * 60 * 60 * 1000
+const CACHE_TTL = 6 * 60 * 60 * 1000
 
 export default function Scanner({ profile }) {
   const [stocks, setStocks] = useState([])
