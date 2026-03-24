@@ -191,6 +191,7 @@ function PlanModal({ stock, onClose, userId }) {
               <Tag {...arch} />
               {plan?.conviction && <span style={{ fontSize: 10, fontWeight: 500, color: CONV[plan.conviction]?.color, background: CONV[plan.conviction]?.bg, padding: '2px 7px', borderRadius: 4 }}>{plan.conviction}</span>}
               {plan?.direction && <span style={{ fontSize: 10, fontWeight: 700, color: plan.direction === 'SHORT' ? '#ef4444' : '#059669', background: plan.direction === 'SHORT' ? '#fff5f5' : '#f0fdf4', border: '1px solid ' + (plan.direction === 'SHORT' ? '#fee2e2' : '#bbf7d0'), padding: '2px 7px', borderRadius: 4 }}>{plan.direction}</span>}
+              {plan?.news_risk && <span style={{ fontSize: 10, fontWeight: 600, color: plan.news_risk === 'HIGH' ? '#dc2626' : plan.news_risk === 'MEDIUM' ? '#b45309' : '#059669', background: plan.news_risk === 'HIGH' ? '#fff5f5' : plan.news_risk === 'MEDIUM' ? '#fffbeb' : '#f0fdf4', border: '1px solid ' + (plan.news_risk === 'HIGH' ? '#fee2e2' : plan.news_risk === 'MEDIUM' ? '#fde68a' : '#bbf7d0'), padding: '2px 7px', borderRadius: 4 }}>⚡ {plan.news_risk} Risk</span>}
             </div>
             {plan && <FollowButton stock={stock} plan={plan} userId={userId} />}
             <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>{stock.name} · {stock.sector} · Score {stock.score}/100 · ~{stock.rr}R</div>
@@ -206,6 +207,14 @@ function PlanModal({ stock, onClose, userId }) {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <LevelChart stock={stock} plan={plan} />
+              {plan?.news_summary && (
+                <div style={{ background: plan.news_risk === 'HIGH' ? '#fff5f5' : plan.news_risk === 'MEDIUM' ? '#fffbeb' : '#f0fdf4', border: `1px solid ${plan.news_risk === 'HIGH' ? '#fecaca' : plan.news_risk === 'MEDIUM' ? '#fde68a' : '#bbf7d0'}`, borderRadius: 8, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 10, color: plan.news_risk === 'HIGH' ? '#dc2626' : plan.news_risk === 'MEDIUM' ? '#b45309' : '#059669', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 5 }}>
+                    📰 News Context — {plan.news_risk} Risk
+                  </div>
+                  <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{plan.news_summary}</div>
+                </div>
+              )}
               <div style={{ background: plan.overhang_rational === false ? '#ecfdf5' : '#fffbeb', border: `1px solid ${plan.overhang_rational === false ? '#bbf7d0' : '#fde68a'}`, borderRadius: 8, padding: '13px 15px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <span style={{ fontSize: 14 }}>{plan.overhang_rational === false ? '🟢' : '🟡'}</span>
