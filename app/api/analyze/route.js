@@ -67,30 +67,25 @@ export async function POST(req) {
       }
     }
 
-    // Generate fresh plan — Claude determines entry
+    // Generate fresh plan with web search for news context
     const price = stock.price
     const high52 = +(price / (1 + stock.from52h / 100)).toFixed(2)
-    const low52 = +(high52 * (1 + stock.from52h / 100) * (stock.rsi / 100) * 0.7).toFixed(2)
 
     const systemPrompt = `You are a senior equity analyst and trader. You identify HIGH CONVICTION setups in both directions — long and short.
 
-BULLISH edge: fundamentally strong stocks mispriced by a resolvable overhang at a key structural level.
-BEARISH edge: overvalued, deteriorating, or news-damaged stocks at distribution tops or breakdown levels.
+CRITICAL FIRST STEP: Before building any plan, search for recent news on the ticker. You must understand WHY the stock is at its current price. A stock down 50% due to accounting fraud, SEC investigation, or existential business threat is NOT the same as a stock down 50% due to macro rotation or temporary sentiment.
 
-Real trades:
-- COIN long: Entered $155 support after FUD selloff. +1100% on calls.
-- HIMS long: Entered $13.97 on legal panic, 100% EPS surprise ignored. +1400% on calls.
-- PLTR long: Triangle compression + macro tailwind. 6.4R.
-- PYPL long: 7x PE double bottom. LEAPs.
-- Bearish example: Stock at 52w high, PE 80x, revenue decelerating, insider selling — short the breakdown.
+NEWS ASSESSMENT RULES:
+- Fraud, accounting restatement, SEC investigation, DOJ probe → HIGH RISK, be very cautious with longs, consider short
+- CEO departure, earnings miss, guidance cut → assess severity, may still be buyable at right price  
+- Macro/sector rotation, rate fears, general market selloff → often creates opportunity
+- Competition threats, margin compression → structural problem, avoid long
+- Regulatory risk (especially for crypto, pharma, fintech) → depends on resolution timeline
 
-YOUR JOB:
-1. Determine direction: LONG or SHORT based on fundamentals + technicals + news/macro
-2. LONG signals: oversold, strong fundamentals, irrational selloff, resolvable overhang
-3. SHORT signals: overvalued (high PE + decelerating growth), near 52w high with deteriorating fundamentals, negative catalyst (regulation, competition, margin compression), RSI > 70 with weak fundamentals
-4. Find the REAL entry — support for longs, resistance/breakdown for shorts
-5. Stop above entry resistance (shorts) or below entry support (longs)
-6. TPs based on structure and fair value
+Only after understanding the news context should you determine direction and build the plan.
+
+BULLISH edge: fundamentally strong stocks mispriced by a RESOLVABLE overhang.
+BEARISH edge: overvalued, deteriorating, or news-damaged stocks.
 
 Respond ONLY with valid JSON, no markdown.`
 
@@ -105,61 +100,66 @@ FUNDAMENTALS:
 PRICE ACTION:
 - Current price: $${price}
 - 52-week high: $${high52} | Distance from 52w high: ${stock.from52h}%
-- RSI (price-range proxy): ${stock.rsi} | Volume ratio: ${stock.vol_ratio}x
+- RSI: ${stock.rsi} | Volume ratio: ${stock.vol_ratio}x
 - Pattern: ${stock.pattern}
+- MA20: ${stock.ma20Pct > 0 ? '+' : ''}${stock.ma20Pct}% | MA50: ${stock.ma50Pct > 0 ? '+' : ''}${stock.ma50Pct}%
+${stock.goldenCross ? '- Golden cross detected' : ''}${stock.deathCross ? '- Death cross detected' : ''}
+${stock.isBreakingOut ? '- Breaking out on volume' : ''}${stock.isBreakingDown ? '- Breaking down on volume' : ''}
+${stock.bullishDiv ? '- Bullish RSI divergence detected' : ''}
 
-TASK:
-1. Determine direction — LONG or SHORT:
-   - SHORT if: RSI > 65 AND (PE > 60 or rev_growth declining) AND near 52w high — stock is extended and fundamentals don't justify valuation
-   - SHORT if: negative catalyst (margin collapse, regulation, losing market share) with stock still elevated
-   - LONG if: RSI < 50, strong fundamentals, oversold or at support, resolvable overhang
-   - LONG if: deeply mispriced relative to earnings power
+STEP 1 — Search for recent news: Search "${stock.ticker} stock news" and "${stock.ticker} ${new Date().getFullYear()}" to understand what is driving price action. Look for any red flags: fraud, investigations, restatements, existential threats.
 
-2. Entry:
-   - LONG: support level, base, or oversold zone — can be at or below current price
-   - SHORT: resistance level, distribution zone, or breakdown confirmation — at or above current price
+STEP 2 — Assess tradability: Is this stock currently safe to trade? Rate the news risk: LOW / MEDIUM / HIGH
 
-3. Stop:
-   - LONG: below entry support (4-7% risk)
-   - SHORT: above entry resistance (4-7% risk)
+STEP 3 — Determine direction: LONG or SHORT based on fundamentals + technicals + news
 
-4. TPs (% move from entry in the trade direction):
-   - TP1: +8-12%, TP2: +18-25%, TP3: +35-65%
-   - All prices must be specific dollar amounts
+STEP 4 — Build the plan with realistic entry based on news context:
+- If HIGH news risk on long: either recommend avoiding entirely OR set a very wide stop to account for uncertainty
+- Entry can be at or below current price for longs, at or above for shorts
+- Stop: 4-7% from entry at structural invalidation
+- TPs: TP1 +8-12%, TP2 +18-25%, TP3 +35-65%
+- All prices must be specific dollar amounts
 
 Return ONLY this JSON:
 {
   "direction": "LONG or SHORT",
+  "news_risk": "LOW or MEDIUM or HIGH",
+  "news_summary": "1-2 sentences on what recent news is driving price action",
   "overhang_rational": false,
-  "overhang_reasoning": "2-3 sentences: why is the stock mispriced or overpriced?",
+  "overhang_reasoning": "2-3 sentences: why is the stock at this price?",
   "thesis": "2-3 sentences: direction + catalyst + why now",
-  "overhang_resolution": "for longs: what resolves the overhang. for shorts: what triggers the decline",
+  "overhang_resolution": "what resolves the overhang (longs) or triggers decline (shorts)",
   "entry_price": 123.45,
   "entry_logic": "why this specific price is the right entry",
-  "entry_price_note": "what this level represents (support/resistance/base/breakdown)",
+  "entry_price_note": "what this level represents technically",
   "stop_price": 115.00,
   "stop_logic": "why this is the invalidation point",
   "tp1_price": 134.00,
-  "tp1_logic": "why cover/trim here",
+  "tp1_logic": "why trim here",
   "tp2_price": 148.00,
-  "tp2_logic": "why cover/trim here",
+  "tp2_logic": "why trim here",
   "tp3_price": 175.00,
-  "tp3_logic": "runner/full cover target",
+  "tp3_logic": "runner target",
   "rr": 3.2,
   "instrument": "Calls/LEAPs/Stock for longs, Puts/Stock short for shorts",
-  "timeframe": "specific timeframe e.g. 2-6 weeks",
+  "timeframe": "specific timeframe",
   "risk_note": "the one thing that invalidates this trade",
   "conviction": "HIGH or MEDIUM or LOW"
 }`
 
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1200,
+      max_tokens: 2000,
       system: systemPrompt,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
       messages: [{ role: 'user', content: userPrompt }]
     })
 
-    const raw = message.content[0].text.trim()
+    // Extract final text block (after tool use)
+    const textBlock = message.content.filter(b => b.type === 'text').pop()
+    if (!textBlock) throw new Error('No text response from AI')
+
+    const raw = textBlock.text.trim()
       .replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '').trim()
     const plan = JSON.parse(raw)
 
