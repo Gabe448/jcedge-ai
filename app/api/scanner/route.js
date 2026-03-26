@@ -497,6 +497,71 @@ async function fetchLiveFundamentals(tickers) {
   return results
 }
 
+// Sector ETF map
+const SECTOR_ETFS = {
+  'Technology':     'XLK',
+  'Financials':     'XLF',
+  'Healthcare':     'XLV',
+  'Cons. Disc.':    'XLY',
+  'Cons. Staples':  'XLP',
+  'Energy':         'XLE',
+  'Industrials':    'XLI',
+  'Materials':      'XLB',
+  'Real Estate':    'XLRE',
+  'Utilities':      'XLU',
+  'Comm. Services': 'XLC',
+}
+
+// Fetch sector performance — weekly, cached in module scope
+let sectorCache = { data: {}, fetchedAt: 0 }
+const SECTOR_TTL = 7 * 24 * 60 * 60 * 1000 // 1 week
+
+async function fetchSectorMacro() {
+  const now = Date.now()
+  if (now - sectorCache.fetchedAt < SECTOR_TTL && Object.keys(sectorCache.data).length > 0) {
+    return sectorCache.data
+  }
+  const etfs = Object.values(SECTOR_ETFS)
+  const results = {}
+  await Promise.all(etfs.map(async etf => {
+    try {
+      const res = await fetch(
+        `https://query2.finance.yahoo.com/v8/finance/chart/${etf}?interval=1wk&range=4wk`,
+        { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(5000) }
+      )
+      const data = await res.json()
+      const closes = data?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(p => p != null) || []
+      if (closes.length >= 2) {
+        const weekPct  = +((closes[closes.length-1] / closes[closes.length-2] - 1) * 100).toFixed(2)
+        const monthPct = +((closes[closes.length-1] / closes[0] - 1) * 100).toFixed(2)
+        results[etf] = { weekPct, monthPct }
+      }
+    } catch {}
+  }))
+  sectorCache = { data: results, fetchedAt: now }
+  return results
+}
+
+function getSectorScore(sector, sectorPerf) {
+  const etf = SECTOR_ETFS[sector]
+  if (!etf || !sectorPerf[etf]) return 10 // neutral if no data
+  const { weekPct, monthPct } = sectorPerf[etf]
+  let score = 10 // base
+  // Weekly momentum
+  if (weekPct > 3) score += 6
+  else if (weekPct > 1) score += 4
+  else if (weekPct > 0) score += 2
+  else if (weekPct < -3) score -= 4
+  else if (weekPct < -1) score -= 2
+  // Monthly trend
+  if (monthPct > 8) score += 4
+  else if (monthPct > 4) score += 2
+  else if (monthPct < -8) score -= 4
+  else if (monthPct < -4) score -= 2
+  return Math.max(0, Math.min(20, score))
+}
+
+
 // Fetch 60d OHLCV for real TA calculations
 async function fetchTA(tickers) {
   const results = {}
@@ -604,85 +669,89 @@ function calcRSI(prices, period = 14) {
 }
 
 function scoreStock(s) {
-  // ── LONG SCORING ──────────────────────────────────────────
-  // Fundamentals /30
+  // ── LONG SCORING ─────────────────────────────────────────
+  // Fundamentals /20 — quality gate, static quarterly
   let fund = 0
-  if (s.rev_growth > 20) fund += 8; else if (s.rev_growth > 10) fund += 5; else if (s.rev_growth > 0) fund += 2
-  if (s.margin > 20) fund += 7; else if (s.margin > 10) fund += 4; else if (s.margin > 0) fund += 1
-  if (s.roe > 20) fund += 5
-  if (s.pe > 0 && s.pe < 20) fund += 5; else if (s.pe > 0 && s.pe < 35) fund += 3
-  if (s.debt_eq < 0.5) fund += 5
-  const longFund = Math.min(fund, 30)
+  if (s.rev_growth > 20) fund += 6; else if (s.rev_growth > 10) fund += 4; else if (s.rev_growth > 0) fund += 2
+  if (s.margin > 20) fund += 5; else if (s.margin > 10) fund += 3; else if (s.margin > 0) fund += 1
+  if (s.roe > 20) fund += 4
+  if (s.pe > 0 && s.pe < 20) fund += 3; else if (s.pe > 0 && s.pe < 35) fund += 1
+  if (s.debt_eq < 0.5) fund += 2
+  const longFund = Math.min(fund, 20)
 
-  // Macro/momentum /25
-  let mac = 0
-  if (s.rev_growth > 30) mac += 12; else if (s.rev_growth > 15) mac += 8; else if (s.rev_growth > 5) mac += 5
-  if (s.mom20 < -10) mac += 8   // sold off hard = potential opportunity
-  else if (s.mom20 < -5) mac += 4
-  if (s.mom5 > 2 && s.mom20 < 0) mac += 5  // starting to turn after selloff
-  const longMacro = Math.min(mac, 25)
+  // Macro /20 — sector ETF performance, weekly refresh
+  const longMacro = Math.min(s.sectorScore || 10, 20)
 
-  // Mispricing /25
+  // Mispricing /20 — how far from fair value
   let mis = 0
-  if (s.from52h < -15) mis += 10
-  if (s.from52h < -30) mis += 5
-  if (s.from52h < -10 && s.rev_growth > 10) mis += 8
-  if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) mis += 7
-  if (s.bullishDiv) mis += 5   // RSI divergence = hidden strength
-  const longMispricing = Math.min(mis, 25)
+  if (s.from52h < -15) mis += 8
+  if (s.from52h < -30) mis += 4
+  if (s.from52h < -10 && s.rev_growth > 10) mis += 6
+  if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) mis += 5
+  if (s.bullishDiv) mis += 4
+  const longMispricing = Math.min(mis, 20)
 
-  // Technical /20 — uses real TA
+  // Technical /40 — daily, drives ranking rotation
   let tech = 0
-  if (s.rsi < 30) tech += 10        // extremely oversold
-  else if (s.rsi < 40) tech += 7    // oversold
-  else if (s.rsi < 55) tech += 4    // neutral/pullback
-  if (s.aboveMa20) tech += 3        // above 20MA = trend intact
-  if (s.aboveMa50) tech += 3        // above 50MA = bullish structure
-  if (s.goldenCross) tech += 4      // MA crossover signal
-  if (s.isConsolidating) tech += 3  // tight base = coiled spring
-  if (s.isBreakingOut) tech += 5    // breaking out with volume
-  if (s.volTrend > 1.5) tech += 3   // rising volume
-  if (s.volTrend > 2.0) tech += 2
-  const longTech = Math.min(tech, 20)
+  // RSI
+  if (s.rsi < 25) tech += 14
+  else if (s.rsi < 35) tech += 10
+  else if (s.rsi < 45) tech += 6
+  else if (s.rsi < 55) tech += 3
+  // MA positioning
+  if (s.aboveMa20) tech += 4
+  if (s.aboveMa50) tech += 4
+  // Crossovers
+  if (s.goldenCross) tech += 6
+  // Pattern
+  if (s.isConsolidating) tech += 4
+  if (s.isBreakingOut) tech += 8
+  // Divergence
+  if (s.bullishDiv) tech += 4
+  // Volume
+  if (s.volTrend > 2.0) tech += 4
+  else if (s.volTrend > 1.5) tech += 2
+  // Momentum turning
+  if (s.mom5 > 2 && s.mom20 < -5) tech += 4  // turning up after selloff
+  const longTech = Math.min(tech, 40)
 
   const longScore = longFund + longMacro + longMispricing + longTech
 
   // ── SHORT SCORING ─────────────────────────────────────────
-  // Weak fundamentals /30
+  // Weak fundamentals /20
   let sFund = 0
-  if (s.rev_growth < 0) sFund += 10; else if (s.rev_growth < 5) sFund += 5
-  if (s.margin < 0) sFund += 10; else if (s.margin < 5) sFund += 5
-  if (s.pe > 60 && s.rev_growth < 20) sFund += 10
-  if (s.pe > 100) sFund += 5
-  const shortFund = Math.min(sFund, 30)
+  if (s.rev_growth < 0) sFund += 8; else if (s.rev_growth < 5) sFund += 4
+  if (s.margin < 0) sFund += 8; else if (s.margin < 5) sFund += 4
+  if (s.pe > 60 && s.rev_growth < 20) sFund += 6
+  if (s.pe > 100) sFund += 4
+  const shortFund = Math.min(sFund, 20)
 
-  // Overvaluation /25
+  // Sector headwind /20
+  const sectorShortScore = s.sectorScore != null ? Math.max(0, 20 - s.sectorScore) : 10
+  const shortMacro = Math.min(sectorShortScore, 20)
+
+  // Overvaluation /20
   let sVal = 0
-  if (s.from52h > -8 && s.pe > 50) sVal += 15
-  if (s.from52h > -5) sVal += 10
-  if (s.pe > 80 && s.rev_growth < 30) sVal += 10
-  if (s.mom20 > 15 && s.pe > 40) sVal += 5  // extended run on weak fundamentals
-  const shortOverval = Math.min(sVal, 25)
+  if (s.from52h > -8 && s.pe > 50) sVal += 10
+  if (s.from52h > -5) sVal += 6
+  if (s.pe > 80 && s.rev_growth < 30) sVal += 8
+  if (s.mom20 > 15 && s.pe > 40) sVal += 4
+  const shortOverval = Math.min(sVal, 20)
 
-  // Technical deterioration /25
+  // Technical deterioration /40
   let sTech = 0
-  if (s.rsi > 75) sTech += 12
-  else if (s.rsi > 65) sTech += 7
-  if (!s.aboveMa20) sTech += 4      // broke below 20MA
-  if (!s.aboveMa50) sTech += 4      // broke below 50MA
-  if (s.deathCross) sTech += 5      // death cross = trend reversal
-  if (s.isBreakingDown) sTech += 6  // breaking down with volume
-  if (s.volTrend > 1.5 && s.rsi > 65) sTech += 3  // high volume at top
-  const shortTech = Math.min(sTech, 25)
+  if (s.rsi > 80) sTech += 14
+  else if (s.rsi > 72) sTech += 10
+  else if (s.rsi > 65) sTech += 6
+  if (!s.aboveMa20) sTech += 6
+  if (!s.aboveMa50) sTech += 6
+  if (s.deathCross) sTech += 8
+  if (s.isBreakingDown) sTech += 10
+  if (s.volTrend > 1.5 && s.rsi > 65) sTech += 4
+  if (s.mom5 < -3 && s.mom20 > 8) sTech += 6  // rolling over
+  const shortTech = Math.min(sTech, 40)
 
-  // Momentum exhaustion /20
-  let sMom = 0
-  if (s.from52h > -8 && s.rsi > 65) sMom += 10
-  if (s.mom5 < -3 && s.mom20 > 10) sMom += 8   // starting to roll over
-  if (s.mom20 > 25) sMom += 5                    // extremely extended
-  const shortMom = Math.min(sMom, 20)
-
-  const shortScore = shortFund + shortOverval + shortTech + shortMom
+  const shortScore = shortFund + shortMacro + shortOverval + shortTech
 
   const isShort = shortScore > longScore && shortScore > 40
   const score   = isShort ? shortScore : longScore
@@ -731,7 +800,7 @@ function scoreStock(s) {
   return {
     ...s, score, direction,
     breakdown: isShort
-      ? { fundamentals: shortFund, macro: shortMom, mispricing: shortOverval, technical: shortTech }
+      ? { fundamentals: shortFund, macro: shortMacro, mispricing: shortOverval, technical: shortTech }
       : { fundamentals: longFund, macro: longMacro, mispricing: longMispricing, technical: longTech },
     archetype, upside: +upside.toFixed(1), stopPct, rr, pattern
   }
@@ -742,7 +811,10 @@ export async function GET() {
     // Step 1: fetch live prices for all tickers
     const priceData = await fetchBatchPrices(ALL_TICKERS)
 
-    // Step 2: fetch real TA for all tickers with price data
+    // Step 2: fetch sector macro (weekly cache)
+    const sectorPerf = await fetchSectorMacro()
+
+    // Step 3: fetch real TA for all tickers with price data
     const hasPrices = ALL_TICKERS.filter(t => priceData[t]?.price > 0)
     const taData = await fetchTA(hasPrices)
 
@@ -794,6 +866,7 @@ export async function GET() {
         margin:     fund.margin,
         roe:        fund.roe,
         debt_eq:    fund.debt_eq,
+        sectorScore:    getSectorScore(sector, sectorPerf),
         // real TA fields
         ma20Pct:       ta.ma20Pct       || 0,
         ma50Pct:       ta.ma50Pct       || 0,
