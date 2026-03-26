@@ -672,11 +672,11 @@ function scoreStock(s) {
   // ── LONG SCORING ─────────────────────────────────────────
   // Fundamentals /20 — quality gate, static quarterly
   let fund = 0
-  if (s.rev_growth > 20) fund += 6; else if (s.rev_growth > 10) fund += 4; else if (s.rev_growth > 0) fund += 2
-  if (s.margin > 20) fund += 5; else if (s.margin > 10) fund += 3; else if (s.margin > 0) fund += 1
-  if (s.roe > 20) fund += 4
-  if (s.pe > 0 && s.pe < 20) fund += 3; else if (s.pe > 0 && s.pe < 35) fund += 1
-  if (s.debt_eq < 0.5) fund += 2
+  if (s.rev_growth > 20) fund += 7; else if (s.rev_growth > 10) fund += 5; else if (s.rev_growth > 0) fund += 3
+  if (s.margin > 20) fund += 6; else if (s.margin > 10) fund += 4; else if (s.margin > 0) fund += 2
+  if (s.roe > 20) fund += 4; else if (s.roe > 10) fund += 2
+  if (s.pe > 0 && s.pe < 20) fund += 3; else if (s.pe > 0 && s.pe < 40) fund += 2
+  if (s.debt_eq < 0.5) fund += 2; else if (s.debt_eq < 1.0) fund += 1
   const longFund = Math.min(fund, 20)
 
   // Macro /20 — sector ETF performance, weekly refresh
@@ -684,35 +684,39 @@ function scoreStock(s) {
 
   // Mispricing /20 — how far from fair value
   let mis = 0
-  if (s.from52h < -15) mis += 8
-  if (s.from52h < -30) mis += 4
+  if (s.from52h < -10) mis += 5
+  if (s.from52h < -20) mis += 5
+  if (s.from52h < -35) mis += 4
   if (s.from52h < -10 && s.rev_growth > 10) mis += 6
   if (s.pe > 0 && s.pe < 15 && s.rev_growth > 5) mis += 5
+  if (s.pe > 0 && s.pe < 25 && s.rev_growth > 15) mis += 3
   if (s.bullishDiv) mis += 4
   const longMispricing = Math.min(mis, 20)
 
   // Technical /40 — daily, drives ranking rotation
   let tech = 0
-  // RSI
-  if (s.rsi < 25) tech += 14
-  else if (s.rsi < 35) tech += 10
-  else if (s.rsi < 45) tech += 6
-  else if (s.rsi < 55) tech += 3
-  // MA positioning
-  if (s.aboveMa20) tech += 4
-  if (s.aboveMa50) tech += 4
+  // RSI — more generous thresholds
+  if (s.rsi < 25) tech += 16
+  else if (s.rsi < 35) tech += 13
+  else if (s.rsi < 45) tech += 9
+  else if (s.rsi < 55) tech += 6
+  else if (s.rsi < 65) tech += 3
+  // MA positioning — always award if above
+  if (s.aboveMa20) tech += 5
+  if (s.aboveMa50) tech += 5
   // Crossovers
-  if (s.goldenCross) tech += 6
+  if (s.goldenCross) tech += 7
   // Pattern
-  if (s.isConsolidating) tech += 4
-  if (s.isBreakingOut) tech += 8
+  if (s.isConsolidating) tech += 5
+  if (s.isBreakingOut) tech += 9
   // Divergence
-  if (s.bullishDiv) tech += 4
-  // Volume
-  if (s.volTrend > 2.0) tech += 4
-  else if (s.volTrend > 1.5) tech += 2
+  if (s.bullishDiv) tech += 5
+  // Volume — lower bar
+  if (s.volTrend > 1.8) tech += 5
+  else if (s.volTrend > 1.2) tech += 3
   // Momentum turning
-  if (s.mom5 > 2 && s.mom20 < -5) tech += 4  // turning up after selloff
+  if (s.mom5 > 2 && s.mom20 < -5) tech += 5
+  else if (s.mom5 > 0 && s.mom20 < 0) tech += 2
   const longTech = Math.min(tech, 40)
 
   const longScore = longFund + longMacro + longMispricing + longTech
@@ -740,15 +744,17 @@ function scoreStock(s) {
 
   // Technical deterioration /40
   let sTech = 0
-  if (s.rsi > 80) sTech += 14
-  else if (s.rsi > 72) sTech += 10
-  else if (s.rsi > 65) sTech += 6
-  if (!s.aboveMa20) sTech += 6
-  if (!s.aboveMa50) sTech += 6
-  if (s.deathCross) sTech += 8
-  if (s.isBreakingDown) sTech += 10
-  if (s.volTrend > 1.5 && s.rsi > 65) sTech += 4
-  if (s.mom5 < -3 && s.mom20 > 8) sTech += 6  // rolling over
+  if (s.rsi > 80) sTech += 16
+  else if (s.rsi > 72) sTech += 12
+  else if (s.rsi > 65) sTech += 8
+  else if (s.rsi > 58) sTech += 4
+  if (!s.aboveMa20) sTech += 7
+  if (!s.aboveMa50) sTech += 7
+  if (s.deathCross) sTech += 9
+  if (s.isBreakingDown) sTech += 11
+  if (s.volTrend > 1.5 && s.rsi > 60) sTech += 5
+  if (s.mom5 < -3 && s.mom20 > 5) sTech += 7
+  else if (s.mom5 < 0 && s.mom20 > 10) sTech += 4
   const shortTech = Math.min(sTech, 40)
 
   const shortScore = shortFund + shortMacro + shortOverval + shortTech
