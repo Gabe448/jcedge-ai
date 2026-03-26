@@ -23,12 +23,14 @@ async function getLivePrice(ticker) {
 async function getNewsHeadlines(ticker) {
   try {
     const res = await fetch(
-      `https://query2.finance.yahoo.com/v1/finance/search?q=${ticker}&newsCount=6&quotesCount=0`,
+      `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=6&quotesCount=0`,
       { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(4000) }
     )
+    if (!res.ok) return ''
     const data = await res.json()
     const news = data?.news || []
-    return news.slice(0, 6).map(n => `- ${n.title}`).join('\n')
+    if (!news.length) return ''
+    return news.slice(0, 6).map(n => `- ${String(n.title || '').replace(/`/g, "'")} `).join('\n')
   } catch { return '' }
 }
 
@@ -109,8 +111,8 @@ PRICE ACTION:
 - Current price: $${price} | 52w high: $${high52} | Distance from high: ${stock.from52h}%
 - RSI: ${stock.rsi} | Volume ratio: ${stock.vol_ratio}x
 - Pattern: ${stock.pattern}
-- MA20: ${stock.ma20Pct > 0 ? '+' : ''}${stock.ma20Pct || 0}% | MA50: ${stock.ma50Pct > 0 ? '+' : ''}${stock.ma50Pct || 0}%
-${stock.goldenCross ? '- Golden cross' : ''}${stock.deathCross ? '- Death cross' : ''}${stock.isBreakingOut ? '- Breaking out on volume' : ''}${stock.isBreakingDown ? '- Breaking down on volume' : ''}${stock.bullishDiv ? '- Bullish RSI divergence' : ''}
+${stock.ma20Pct != null ? `- MA20: ${stock.ma20Pct > 0 ? '+' : ''}${stock.ma20Pct}% | MA50: ${stock.ma50Pct > 0 ? '+' : ''}${stock.ma50Pct || 0}%` : ''}
+${[stock.goldenCross && 'Golden cross', stock.deathCross && 'Death cross', stock.isBreakingOut && 'Breaking out on volume', stock.isBreakingDown && 'Breaking down on volume', stock.bullishDiv && 'Bullish RSI divergence'].filter(Boolean).map(x => '- ' + x).join('\n')}
 
 RECENT NEWS HEADLINES:
 ${headlines || '- No recent headlines found'}
@@ -157,9 +159,21 @@ Return ONLY this JSON:
       messages: [{ role: 'user', content: userPrompt }]
     })
 
-    const raw = message.content[0].text.trim()
-      .replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '').trim()
+    const rawText = message.content[0].text.trim()
+    // Extract JSON even if Claude adds preamble text
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error('No JSON in response')
+    const raw = jsonMatch[0]
     const plan = JSON.parse(raw)
+    // Validate required fields — if incomplete, still return what we have
+    if (!plan.entry_price) plan.entry_price = stock.price
+    if (!plan.stop_price) plan.stop_price = +(stock.price * 0.94).toFixed(2)
+    if (!plan.tp1_price) plan.tp1_price = +(stock.price * 1.10).toFixed(2)
+    if (!plan.tp2_price) plan.tp2_price = +(stock.price * 1.20).toFixed(2)
+    if (!plan.tp3_price) plan.tp3_price = +(stock.price * 1.35).toFixed(2)
+    if (!plan.thesis) plan.thesis = 'Analysis unavailable — please retry.'
+    if (!plan.direction) plan.direction = 'LONG'
+    if (!plan.conviction) plan.conviction = 'LOW'
 
     await supabase.from('ai_plans').insert({
       ticker: stock.ticker,
