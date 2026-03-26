@@ -423,7 +423,7 @@ export default function Scanner({ profile }) {
                   <ScoreBar val={s.score} max={100} color="#111" />
 
                   <div style={{ display: 'flex', gap: 10, marginTop: 12, marginBottom: 12 }}>
-                    {[['Fund.', s.breakdown.fundamentals, 30, '#2563eb'], ['Macro', s.breakdown.macro, 25, '#7c3aed'], ['Misprice', s.breakdown.mispricing, 25, '#059669'], ['Tech', s.breakdown.technical, 20, '#b45309']].map(([l, v, m, c]) => (
+                    {[['Fund.', s.breakdown.fundamentals, 20, '#2563eb'], ['Macro', s.breakdown.macro, 20, '#7c3aed'], ['Misprice', s.breakdown.mispricing, 20, '#059669'], ['Tech', s.breakdown.technical, 40, '#b45309']].map(([l, v, m, c]) => (
                       <div key={l} style={{ flex: 1 }}>
                         <div style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 2 }}>{l}</div>
                         <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, fontWeight: 600, color: '#111', marginBottom: 3 }}>{v}<span style={{ fontSize: 9, color: '#d1d5db' }}>/{m}</span></div>
