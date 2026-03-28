@@ -361,6 +361,39 @@ export default function Scanner({ profile }) {
         </div>
       ) : (
         <>
+          {/* Market regime banner */}
+          {stocks.length > 0 && stocks[0].regime && (() => {
+            const r = stocks[0].regime
+            const vix = stocks[0].marketVix
+            const colors = {
+              bear:    { bg: '#fff5f5', border: '#fecaca', text: '#dc2626', icon: '🐻' },
+              caution: { bg: '#fffbeb', border: '#fde68a', text: '#b45309', icon: '⚠️' },
+              neutral: { bg: '#f8fafc', border: '#e2e8f0', text: '#64748b', icon: '〰️' },
+              bull:    { bg: '#f0fdf4', border: '#bbf7d0', text: '#059669', icon: '🐂' },
+            }
+            const c = colors[r] || colors.neutral
+            const label = { bear: 'Bear Market', caution: 'Caution — Elevated Risk', neutral: 'Neutral Market', bull: 'Bull Market' }[r]
+            const desc = {
+              bear:    'SPY below key MAs, downtrend confirmed. Oversold ≠ buyable. Prioritize shorts & relative strength longs only.',
+              caution: 'Market showing stress. Require higher conviction for longs. Downtrending stocks are falling knives.',
+              neutral: 'Mixed conditions. Evaluate each setup on its own merit.',
+              bull:    'Supportive tape. Pullbacks in strong stocks are buying opportunities.',
+            }[r]
+            return (
+              <div style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <span style={{ fontSize: 18, flexShrink: 0 }}>{c.icon}</span>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: c.text, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+                    {vix && <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: c.text, background: c.border, padding: '1px 6px', borderRadius: 4 }}>VIX {vix?.toFixed(1)}</span>}
+                    {stocks[0].spyMom20 != null && <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: stocks[0].spyMom20 >= 0 ? '#059669' : '#dc2626' }}>SPY 20d: {stocks[0].spyMom20 > 0 ? '+' : ''}{stocks[0].spyMom20}%</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#374151', lineHeight: 1.5 }}>{desc}</div>
+                </div>
+              </div>
+            )
+          })()}
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
             <div style={{ display: 'flex', gap: 2, background: '#f8fafc', borderRadius: 10, padding: 3, flexWrap: 'wrap' }}>
               {filters.map(f => (
