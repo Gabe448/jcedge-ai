@@ -207,6 +207,12 @@ function PlanModal({ stock, onClose, userId }) {
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
               <LevelChart stock={stock} plan={plan} />
+              {plan?.regime_assessment && (
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '11px 13px' }}>
+                  <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 4 }}>🌍 Market Regime</div>
+                  <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.5 }}>{plan.regime_assessment}</div>
+                </div>
+              )}
               {plan?.news_summary && (
                 <div style={{ background: plan.news_risk === 'HIGH' ? '#fff5f5' : plan.news_risk === 'MEDIUM' ? '#fffbeb' : '#f0fdf4', border: `1px solid ${plan.news_risk === 'HIGH' ? '#fecaca' : plan.news_risk === 'MEDIUM' ? '#fde68a' : '#bbf7d0'}`, borderRadius: 8, padding: '12px 14px' }}>
                   <div style={{ fontSize: 10, color: plan.news_risk === 'HIGH' ? '#dc2626' : plan.news_risk === 'MEDIUM' ? '#b45309' : '#059669', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 5 }}>
