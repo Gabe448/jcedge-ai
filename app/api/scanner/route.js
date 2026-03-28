@@ -497,6 +497,85 @@ async function fetchLiveFundamentals(tickers) {
   return results
 }
 
+// Market regime — daily cache
+let regimeCache = { data: null, fetchedAt: 0 }
+const REGIME_TTL = 6 * 60 * 60 * 1000 // 6 hours
+
+async function fetchMarketRegime() {
+  const now = Date.now()
+  if (regimeCache.data && now - regimeCache.fetchedAt < REGIME_TTL) return regimeCache.data
+
+  try {
+    // Fetch SPY, QQQ, VIX
+    const [spyRes, vixRes] = await Promise.all([
+      fetch('https://query2.finance.yahoo.com/v8/finance/chart/SPY?interval=1d&range=90d',
+        { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) }),
+      fetch('https://query2.finance.yahoo.com/v8/finance/chart/%5EVIX?interval=1d&range=5d',
+        { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) }),
+    ])
+
+    const spyData = await spyRes.json()
+    const vixData = await vixRes.json()
+
+    const spyCloses = spyData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(p => p != null) || []
+    const vix = vixData?.chart?.result?.[0]?.meta?.regularMarketPrice || 20
+
+    if (spyCloses.length < 50) {
+      regimeCache = { data: { regime: 'neutral', vix, spyMom20: 0, spyAbove50ma: true }, fetchedAt: now }
+      return regimeCache.data
+    }
+
+    const spyPrice  = spyCloses[spyCloses.length - 1]
+    const spy50ma   = spyCloses.slice(-50).reduce((a,b) => a+b,0) / 50
+    const spy20ma   = spyCloses.slice(-20).reduce((a,b) => a+b,0) / 20
+    const spy200ma  = spyCloses.length >= 200 ? spyCloses.slice(-200).reduce((a,b) => a+b,0) / 200 : spy50ma
+    const spyMom20  = +((spyPrice / spyCloses[spyCloses.length - 21] - 1) * 100).toFixed(2)
+    const spyMom5   = +((spyPrice / spyCloses[spyCloses.length - 6]  - 1) * 100).toFixed(2)
+    const spyAbove50ma  = spyPrice > spy50ma
+    const spyAbove200ma = spyPrice > spy200ma
+
+    // MA slopes
+    const spy50maOld  = spyCloses.slice(-60,-10).reduce((a,b)=>a+b,0)/50
+    const spy50Slope  = spy50ma - spy50maOld
+
+    // Regime classification
+    let regime = 'neutral'
+    let regimeScore = 0
+
+    if (!spyAbove200ma) regimeScore -= 3
+    if (!spyAbove50ma)  regimeScore -= 2
+    if (spy50Slope < 0) regimeScore -= 2
+    if (spyMom20 < -8)  regimeScore -= 3
+    else if (spyMom20 < -4) regimeScore -= 1
+    if (vix > 30)  regimeScore -= 3
+    else if (vix > 22) regimeScore -= 1
+
+    if (spyAbove200ma && spyAbove50ma) regimeScore += 2
+    if (spy50Slope > 0) regimeScore += 2
+    if (spyMom20 > 4)   regimeScore += 2
+    if (vix < 16)       regimeScore += 1
+
+    if (regimeScore <= -5)      regime = 'bear'
+    else if (regimeScore <= -2) regime = 'caution'
+    else if (regimeScore >= 3)  regime = 'bull'
+    else                        regime = 'neutral'
+
+    const data = {
+      regime, vix, spyMom20, spyMom5,
+      spyAbove50ma, spyAbove200ma,
+      spy50Slope, regimeScore,
+      spyPrice: +spyPrice.toFixed(2),
+      spy50ma:  +spy50ma.toFixed(2),
+      spy200ma: +spy200ma.toFixed(2),
+    }
+    regimeCache = { data, fetchedAt: now }
+    return data
+  } catch {
+    return { regime: 'neutral', vix: 20, spyMom20: 0, spyAbove50ma: true }
+  }
+}
+
+
 // Sector ETF map
 const SECTOR_ETFS = {
   'Technology':     'XLK',
@@ -613,10 +692,50 @@ async function fetchTA(tickers) {
         const isBreakingDown  = price < recentLow  * 1.02 && volTrend > 1.3
         const bullishDiv      = price < recentLow * 1.02 && rsi > 35
 
+        // ── Trend detection ───────────────────────────────
+        // MA slope — is the 20MA rising or falling?
+        const ma20_10dAgo = closes.length >= 30 ? closes.slice(-30,-10).reduce((a,b)=>a+b,0)/20 : ma20
+        const ma50_10dAgo = closes.length >= 60 && ma50 ? closes.slice(-60,-10).reduce((a,b)=>a+b,0)/50 : ma50
+        const ma20Slope = ma20 - ma20_10dAgo  // positive = rising, negative = falling
+        const ma50Slope = ma50 && ma50_10dAgo ? ma50 - ma50_10dAgo : 0
+
+        // Higher highs / lower lows over last 40 days
+        const firstHalf  = closes.slice(-40, -20)
+        const secondHalf = closes.slice(-20)
+        const firstHigh  = firstHalf.length  ? Math.max(...firstHalf)  : price
+        const secondHigh = secondHalf.length ? Math.max(...secondHalf) : price
+        const firstLow   = firstHalf.length  ? Math.min(...firstHalf)  : price
+        const secondLow  = secondHalf.length ? Math.min(...secondHalf) : price
+
+        const makingHigherHighs = secondHigh > firstHigh * 1.01
+        const makingLowerHighs  = secondHigh < firstHigh * 0.99
+        const makingHigherLows  = secondLow  > firstLow  * 1.01
+        const makingLowerLows   = secondLow  < firstLow  * 0.99
+
+        // Trend classification
+        const inUptrend   = makingHigherHighs && makingHigherLows && ma20Slope > 0
+        const inDowntrend = makingLowerHighs  && makingLowerLows  && ma20Slope < 0
+
+        // Downtrend exhaustion signals (potential reversal)
+        const volumeClimax  = volTrend > 2.5 && mom5 < -5   // heavy selling = capitulation
+        const higherLowForm = makingLowerHighs && !makingLowerLows && rsi < 45  // structure improving
+        const downtrendExhausted = inDowntrend && (volumeClimax || higherLowForm || bullishDiv)
+
+        // Relative strength vs market (proxy: how far off highs vs how oversold RSI is)
+        // Strong RS: stock is only -10% off high but RSI is 35 = holding up well
+        // Weak RS: stock is -40% off high and RSI is 25 = falling knife
+        const relativeStrength = closes.length > 1
+          ? Math.max(0, Math.min(100, 50 + (rsi - 50) - (Math.abs(ma20Pct) * 0.5)))
+          : 50
+
         results[ticker] = {
           rsi, ma20Pct, ma50Pct, aboveMa20, aboveMa50,
           goldenCross, deathCross, volTrend, mom5, mom20,
           isConsolidating, isBreakingOut, isBreakingDown, bullishDiv,
+          // trend
+          inUptrend, inDowntrend, downtrendExhausted,
+          makingHigherHighs, makingLowerHighs, makingHigherLows, makingLowerLows,
+          ma20Slope, ma50Slope, volumeClimax, higherLowForm, relativeStrength,
         }
       } catch {}
     }))
@@ -693,31 +812,76 @@ function scoreStock(s) {
   if (s.bullishDiv) mis += 4
   const longMispricing = Math.min(mis, 20)
 
-  // Technical /40 — daily, drives ranking rotation
+  // Technical /40 — daily, regime + trend aware
   let tech = 0
-  // RSI — more generous thresholds
-  if (s.rsi < 25) tech += 16
-  else if (s.rsi < 35) tech += 13
-  else if (s.rsi < 45) tech += 9
-  else if (s.rsi < 55) tech += 6
-  else if (s.rsi < 65) tech += 3
-  // MA positioning — always award if above
-  if (s.aboveMa20) tech += 5
-  if (s.aboveMa50) tech += 5
+
+  // ── Market regime modifier ─────────────────────────────
+  const isBearMarket  = s.regime === 'bear'
+  const isCaution     = s.regime === 'caution'
+  const isBullMarket  = s.regime === 'bull'
+
+  // ── Stock trend ────────────────────────────────────────
+  const stockInDowntrend = s.inDowntrend
+  const stockInUptrend   = s.inUptrend
+  const downtrendOK      = s.downtrendExhausted  // downtrend but showing reversal signs
+
+  // RSI — heavily penalized in bear market unless downtrend is exhausted
+  if (isBearMarket && stockInDowntrend && !downtrendOK) {
+    // Bear market + downtrend = falling knife, give almost no credit for oversold
+    if (s.rsi < 25) tech += 4
+    else if (s.rsi < 35) tech += 2
+    // No credit for RSI 35-55 in bear + downtrend
+  } else if (isBearMarket && !stockInDowntrend) {
+    // Bear market but stock showing relative strength = worth watching
+    if (s.rsi < 25) tech += 12
+    else if (s.rsi < 35) tech += 9
+    else if (s.rsi < 45) tech += 5
+    else if (s.rsi < 55) tech += 2
+  } else if (isCaution && stockInDowntrend && !downtrendOK) {
+    // Caution regime + downtrend = reduce reward
+    if (s.rsi < 25) tech += 9
+    else if (s.rsi < 35) tech += 6
+    else if (s.rsi < 45) tech += 3
+  } else {
+    // Bull market OR downtrend exhausted — full credit
+    if (s.rsi < 25) tech += 16
+    else if (s.rsi < 35) tech += 13
+    else if (s.rsi < 45) tech += 9
+    else if (s.rsi < 55) tech += 6
+    else if (s.rsi < 65) tech += 3
+  }
+
+  // ── Trend bonuses ──────────────────────────────────────
+  if (stockInUptrend) tech += 6                  // confirmed uptrend = big bonus
+  if (downtrendOK)    tech += 5                  // downtrend exhausting = setup forming
+  if (stockInDowntrend && !downtrendOK) tech -= 4 // raw downtrend penalty
+
+  // MA positioning — worth more in bull, less in bear
+  if (s.aboveMa20) tech += isBearMarket ? 2 : 5
+  if (s.aboveMa50) tech += isBearMarket ? 2 : 5
+
+  // MA slopes matter more than position
+  if (s.ma20Slope > 0 && s.ma50Slope > 0) tech += 4   // both MAs rising = momentum
+  if (s.ma20Slope < 0 && s.ma50Slope < 0) tech -= 3   // both falling = avoid
+
   // Crossovers
   if (s.goldenCross) tech += 7
   // Pattern
-  if (s.isConsolidating) tech += 5
+  if (s.isConsolidating && !stockInDowntrend) tech += 5  // only reward consolidation in uptrend/neutral
   if (s.isBreakingOut) tech += 9
   // Divergence
   if (s.bullishDiv) tech += 5
-  // Volume — lower bar
+  // Volume
   if (s.volTrend > 1.8) tech += 5
   else if (s.volTrend > 1.2) tech += 3
-  // Momentum turning
+  // Relative strength — stock holding up better than market
+  if (s.relativeStrength > 60) tech += 4
+  if (s.relativeStrength > 70) tech += 3
+  // Momentum turning after selloff
   if (s.mom5 > 2 && s.mom20 < -5) tech += 5
   else if (s.mom5 > 0 && s.mom20 < 0) tech += 2
-  const longTech = Math.min(tech, 40)
+
+  const longTech = Math.min(Math.max(tech, 0), 40)
 
   const longScore = longFund + longMacro + longMispricing + longTech
 
@@ -742,7 +906,8 @@ function scoreStock(s) {
   if (s.mom20 > 15 && s.pe > 40) sVal += 4
   const shortOverval = Math.min(sVal, 20)
 
-  // Technical deterioration /40
+  // Technical deterioration /40 — boosted in bear market
+  const bearBoost = (s.regime === 'bear' || s.regime === 'caution') ? 1.3 : 1.0
   let sTech = 0
   if (s.rsi > 80) sTech += 16
   else if (s.rsi > 72) sTech += 12
@@ -752,10 +917,12 @@ function scoreStock(s) {
   if (!s.aboveMa50) sTech += 7
   if (s.deathCross) sTech += 9
   if (s.isBreakingDown) sTech += 11
+  if (s.inDowntrend) sTech += 8           // confirmed downtrend = short signal
   if (s.volTrend > 1.5 && s.rsi > 60) sTech += 5
   if (s.mom5 < -3 && s.mom20 > 5) sTech += 7
   else if (s.mom5 < 0 && s.mom20 > 10) sTech += 4
-  const shortTech = Math.min(sTech, 40)
+  if (s.ma20Slope < 0 && s.ma50Slope < 0) sTech += 5  // both MAs declining
+  const shortTech = Math.min(Math.round(sTech * bearBoost), 40)
 
   const shortScore = shortFund + shortMacro + shortOverval + shortTech
 
@@ -817,8 +984,8 @@ export async function GET() {
     // Step 1: fetch live prices for all tickers
     const priceData = await fetchBatchPrices(ALL_TICKERS)
 
-    // Step 2: fetch sector macro (weekly cache)
-    const sectorPerf = await fetchSectorMacro()
+    // Step 2: fetch market regime (6h cache) + sector macro (weekly)
+    const [regime, sectorPerf] = await Promise.all([fetchMarketRegime(), fetchSectorMacro()])
 
     // Step 3: fetch real TA for all tickers with price data
     const hasPrices = ALL_TICKERS.filter(t => priceData[t]?.price > 0)
@@ -873,6 +1040,9 @@ export async function GET() {
         roe:        fund.roe,
         debt_eq:    fund.debt_eq,
         sectorScore:    getSectorScore(sector, sectorPerf),
+        regime:         regime.regime,
+        marketVix:      regime.vix,
+        spyMom20:       regime.spyMom20,
         // real TA fields
         ma20Pct:       ta.ma20Pct       || 0,
         ma50Pct:       ta.ma50Pct       || 0,
