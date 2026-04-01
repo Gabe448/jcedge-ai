@@ -86,7 +86,16 @@ export async function POST(req) {
     const high52 = +(price / (1 + stock.from52h / 100)).toFixed(2)
 
     // Build regime/trend context string
-    const regimeLabel = { bear: 'BEAR MARKET', caution: 'CAUTION', neutral: 'NEUTRAL', bull: 'BULL MARKET' }[stock.regime] || 'NEUTRAL'
+    const regimeLabel = {
+      panic_selloff: 'PANIC SELLOFF — Market in freefall, VIX spiking',
+      bear:          'BEAR MARKET — SPY below MAs, downtrend confirmed',
+      correction:    'CORRECTION PERIOD — Pulling back, 200MA still intact',
+      lost:          'LOST PERIOD — Choppy, no clear direction',
+      neutral:       'NEUTRAL',
+      bull_relief:   'BULL RELIEF — Bouncing after hard selloff, unconfirmed recovery',
+      bull:          'BULL MARKET — Uptrend intact, supportive tape',
+      bull_run:      'BULL RUN — Market accelerating, momentum high',
+    }[stock.regime] || 'NEUTRAL'
     const trendLabel = stock.inUptrend ? 'UPTREND (higher highs + higher lows)' : stock.inDowntrend ? 'DOWNTREND (lower highs + lower lows)' : 'SIDEWAYS/MIXED'
     const exhaustionSignals = [
       stock.downtrendExhausted && 'Downtrend exhaustion detected',
@@ -97,11 +106,14 @@ export async function POST(req) {
 
     const systemPrompt = `You are a senior equity analyst and trader. You identify HIGH CONVICTION setups in both directions — long and short.
 
-MARKET REGIME RULES — apply before anything else:
-- BEAR MARKET (SPY below MAs, VIX>25): Oversold does NOT mean buyable. A stock down 40% in a bear market can go to -70%. Only consider longs with confirmed relative strength OR clear downtrend exhaustion signals. Default to LOW conviction on longs. Shorts get priority.
-- CAUTION: Require clear technical base or exhaustion before calling a long. Avoid longs in confirmed downtrends.
-- BULL: Pullbacks to support in uptrending stocks are high conviction longs.
-- NEUTRAL: Evaluate each setup on its own merit.
+MARKET REGIME RULES — apply strictly before building any plan:
+- PANIC SELLOFF (VIX spiking, SPY dumping fast): Do not buy anything. Cash or short only. Even strong stocks are going down. Flag all longs as AVOID.
+- BEAR MARKET (SPY below both MAs, declining): Oversold is NOT a buy signal — stocks can halve again. Only longs with confirmed relative strength OR clear downtrend exhaustion. All longs = LOW conviction max. Shorts preferred.
+- CORRECTION PERIOD (below 50MA, above 200MA): Wait for stabilization. Require visible base or exhaustion before buying. Downtrending stocks = avoid. Relative strength stocks only.
+- LOST PERIOD (choppy, no direction): Only the cleanest setups qualify. Tight stops, lower position size. Skip anything marginal.
+- BULL RELIEF (bouncing after selloff, still below MAs): Could be dead cat or real recovery — don't know yet. MEDIUM conviction max. Require follow-through confirmation. Wide stops.
+- BULL MARKET (above MAs, steady uptrend): Pullbacks to support in uptrending stocks are high conviction. Shorts need strong independent thesis.
+- BULL RUN (accelerating, strong momentum, low VIX): Ride the trend. Breakouts and momentum setups are highest conviction. Oversold pullbacks in strong stocks are aggressive buys.
 
 STOCK TREND RULES:
 - Confirmed downtrend + bear/caution market: Do NOT call a high conviction long. Only consider if downtrend is clearly exhausting. Flag HIGH risk.
