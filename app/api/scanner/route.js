@@ -538,10 +538,37 @@ async function fetchMarketRegime() {
     const spy50maOld  = spyCloses.slice(-60,-10).reduce((a,b)=>a+b,0)/50
     const spy50Slope  = spy50ma - spy50maOld
 
-    // Regime classification
-    let regime = 'neutral'
-    let regimeScore = 0
+    // VIX spike detection
+    const vixCloses = vixData?.chart?.result?.[0]?.indicators?.quote?.[0]?.close?.filter(p => p != null) || []
+    const vixPrev = vixCloses.length >= 3 ? vixCloses[vixCloses.length - 3] : vix
+    const vixSpike = vix > 28 && vix > vixPrev * 1.15
 
+    const spyMom3 = spyCloses.length >= 4 ? +((spyPrice / spyCloses[spyCloses.length - 4] - 1) * 100).toFixed(2) : 0
+    const spyMin10d = Math.min(...spyCloses.slice(-11, -1))
+    const recentPanic = spyMom20 < -8 || (vix > 28 && spyMom20 < -4)
+
+    // ── 7-regime classification ───────────────────────────
+    let regime
+    if (vixSpike && spyMom5 < -4) {
+      regime = 'panic_selloff'
+    } else if (recentPanic && spyMom3 > 2.5 && !spyAbove50ma) {
+      regime = 'bull_relief'
+    } else if (!spyAbove50ma && !spyAbove200ma && spy50Slope < 0 && vix > 22) {
+      regime = 'bear'
+    } else if (!spyAbove50ma && spyAbove200ma && vix > 18) {
+      regime = 'correction'
+    } else if (spyAbove50ma && spyAbove200ma && spyMom20 > 8 && vix < 15) {
+      regime = 'bull_run'
+    } else if (spyAbove50ma && spyAbove200ma && spy50Slope > 0 && vix < 20) {
+      regime = 'bull'
+    } else if (Math.abs(spyMom20) < 4 && vix > 16 && vix < 26) {
+      regime = 'lost'
+    } else {
+      regime = 'neutral'
+    }
+
+    // regimeScore for sector scoring
+    let regimeScore = 0
     if (!spyAbove200ma) regimeScore -= 3
     if (!spyAbove50ma)  regimeScore -= 2
     if (spy50Slope < 0) regimeScore -= 2
@@ -549,16 +576,10 @@ async function fetchMarketRegime() {
     else if (spyMom20 < -4) regimeScore -= 1
     if (vix > 30)  regimeScore -= 3
     else if (vix > 22) regimeScore -= 1
-
     if (spyAbove200ma && spyAbove50ma) regimeScore += 2
     if (spy50Slope > 0) regimeScore += 2
     if (spyMom20 > 4)   regimeScore += 2
     if (vix < 16)       regimeScore += 1
-
-    if (regimeScore <= -5)      regime = 'bear'
-    else if (regimeScore <= -2) regime = 'caution'
-    else if (regimeScore >= 3)  regime = 'bull'
-    else                        regime = 'neutral'
 
     const data = {
       regime, vix, spyMom20, spyMom5,
@@ -816,9 +837,14 @@ function scoreStock(s) {
   let tech = 0
 
   // ── Market regime modifier ─────────────────────────────
-  const isBearMarket  = s.regime === 'bear'
-  const isCaution     = s.regime === 'caution'
-  const isBullMarket  = s.regime === 'bull'
+  const isBearMarket  = s.regime === 'bear' || s.regime === 'panic_selloff'
+  const isCaution     = s.regime === 'correction' || s.regime === 'lost'
+  const isBullMarket  = s.regime === 'bull' || s.regime === 'bull_run'
+  const isPanic       = s.regime === 'panic_selloff'
+  const isBullRelief  = s.regime === 'bull_relief'
+  const isBullRun     = s.regime === 'bull_run'
+  const isLost        = s.regime === 'lost'
+  const isCorrection  = s.regime === 'correction'
 
   // ── Stock trend ────────────────────────────────────────
   const stockInDowntrend = s.inDowntrend
@@ -907,7 +933,7 @@ function scoreStock(s) {
   const shortOverval = Math.min(sVal, 20)
 
   // Technical deterioration /40 — boosted in bear market
-  const bearBoost = (s.regime === 'bear' || s.regime === 'caution') ? 1.3 : 1.0
+  const bearBoost = isPanic ? 1.5 : isBearMarket ? 1.3 : isCorrection ? 1.15 : 1.0
   let sTech = 0
   if (s.rsi > 80) sTech += 16
   else if (s.rsi > 72) sTech += 12
