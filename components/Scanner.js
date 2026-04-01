@@ -372,19 +372,36 @@ export default function Scanner({ profile }) {
             const r = stocks[0].regime
             const vix = stocks[0].marketVix
             const colors = {
-              bear:    { bg: '#fff5f5', border: '#fecaca', text: '#dc2626', icon: '🐻' },
-              caution: { bg: '#fffbeb', border: '#fde68a', text: '#b45309', icon: '⚠️' },
-              neutral: { bg: '#f8fafc', border: '#e2e8f0', text: '#64748b', icon: '〰️' },
-              bull:    { bg: '#f0fdf4', border: '#bbf7d0', text: '#059669', icon: '🐂' },
+              panic_selloff: { bg: '#fef2f2', border: '#fca5a5', text: '#b91c1c', icon: '🚨' },
+              bear:          { bg: '#fff5f5', border: '#fecaca', text: '#dc2626', icon: '🐻' },
+              correction:    { bg: '#fff7ed', border: '#fed7aa', text: '#c2410c', icon: '📉' },
+              lost:          { bg: '#faf5ff', border: '#d8b4fe', text: '#7c3aed', icon: '🌀' },
+              neutral:       { bg: '#f8fafc', border: '#e2e8f0', text: '#64748b', icon: '〰️' },
+              bull_relief:   { bg: '#fefce8', border: '#fde047', text: '#854d0e', icon: '🟡' },
+              bull:          { bg: '#f0fdf4', border: '#bbf7d0', text: '#059669', icon: '🐂' },
+              bull_run:      { bg: '#ecfdf5', border: '#6ee7b7', text: '#065f46', icon: '🚀' },
             }
             const c = colors[r] || colors.neutral
-            const label = { bear: 'Bear Market', caution: 'Caution — Elevated Risk', neutral: 'Neutral Market', bull: 'Bull Market' }[r]
+            const label = {
+              panic_selloff: 'Panic Selloff',
+              bear:          'Bear Market',
+              correction:    'Correction Period',
+              lost:          'Lost Period',
+              neutral:       'Neutral',
+              bull_relief:   'Bull Relief',
+              bull:          'Bull Market',
+              bull_run:      'Bull Run',
+            }[r] || r
             const desc = {
-              bear:    'SPY below key MAs, downtrend confirmed. Oversold ≠ buyable. Prioritize shorts & relative strength longs only.',
-              caution: 'Market showing stress. Require higher conviction for longs. Downtrending stocks are falling knives.',
-              neutral: 'Mixed conditions. Evaluate each setup on its own merit.',
-              bull:    'Supportive tape. Pullbacks in strong stocks are buying opportunities.',
-            }[r]
+              panic_selloff: 'Market in freefall — VIX spiking, SPY dumping hard. Do not catch falling knives. Cash or short only.',
+              bear:          'SPY below key MAs, downtrend confirmed. Oversold ≠ buyable. Relative strength longs or shorts only.',
+              correction:    'Market pulling back but 200MA intact. Wait for stabilization. Require exhaustion signals before buying.',
+              lost:          'Market is choppy with no clear direction. Avoid low conviction setups. Only the cleanest charts qualify.',
+              neutral:       'Mixed conditions. Evaluate each setup on its own merit.',
+              bull_relief:   'Market bouncing after a hard selloff — could be dead cat or real recovery. Wait for confirmation before going heavy.',
+              bull:          'Supportive tape. Pullbacks in strong stocks are buying opportunities. Shorts require strong thesis.',
+              bull_run:      'Market accelerating. Momentum setups and breakouts are highest conviction. Ride the trend.',
+            }[r] || ''
             return (
               <div style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
                 <span style={{ fontSize: 18, flexShrink: 0 }}>{c.icon}</span>
