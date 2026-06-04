@@ -1,73 +1,223 @@
-import Anthropic from 'anthropic'
+import Anthropic from '@anthropic-ai/sdk'
+import { createClient } from '@supabase/supabase-js'
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+)
+
+const PLAN_TTL = 48 * 60 * 60 * 1000
+
+async function getLivePrice(ticker) {
+  try {
+    const res = await fetch(
+      `https://query2.finance.yahoo.com/v8/finance/chart/${ticker}?interval=1d&range=1d`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }
+    )
+    const data = await res.json()
+    return data?.chart?.result?.[0]?.meta?.regularMarketPrice || null
+  } catch { return null }
+}
+
+async function getNewsHeadlines(ticker) {
+  try {
+    const res = await fetch(
+      `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(ticker)}&newsCount=6&quotesCount=0`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }, signal: AbortSignal.timeout(4000) }
+    )
+    if (!res.ok) return ''
+    const data = await res.json()
+    const news = data?.news || []
+    if (!news.length) return ''
+    return news.slice(0, 6).map(n => `- ${String(n.title || '').replace(/`/g, "'")}`).join('\n')
+  } catch { return '' }
+}
 
 export async function POST(req) {
   try {
     const stock = await req.json()
 
-    const systemPrompt = `You are a senior buy-side equity analyst and trader. Your edge: find fundamentally strong stocks temporarily mispriced by a RESOLVABLE overhang, at a key structural level, with a macro tailwind.
+    // Check if user is following this stock — return locked plan
+    if (stock.user_id) {
+      const { data: followed } = await supabase
+        .from('followed_plans')
+        .select('*')
+        .eq('user_id', stock.user_id)
+        .eq('ticker', stock.ticker)
+        .eq('active', true)
+        .single()
 
-Real trades this strategy produced:
-- COIN: Platform expansion missed by market. First green candle at $155 key level. +1100% on calls.
-- HIMS: 100% earnings surprise, sold off on legal overhang. Entered at $13.97. +1400% on calls.
-- PLTR: Triangle compression + Iran war tailwind. 6.4R, +850%.
-- PYPL: 7x PE anomaly. Double bottom. LEAPs for position trade.
+      if (followed?.plan_data) {
+        const livePrice = await getLivePrice(stock.ticker)
+        return Response.json({
+          ...followed.plan_data,
+          _cached: true,
+          _locked: true,
+          _livePrice: livePrice || stock.price
+        })
+      }
+    }
 
-CRITICAL REASONING STEP — stress-test the overhang before building the plan:
-1. Is the selloff rational given actual fundamentals? Run the numbers.
-2. Can the stated reason actually impair the business long-term?
-3. Example: "Claude Code caused cybersecurity crash" — does an AI coding tool eliminate enterprise security? No. Cybersecurity spend is non-discretionary. AI makes infrastructure MORE critical to protect. Selloff = narrative overreaction = mispricing.
-4. Temporary/sentiment overhang + intact fundamentals = HIGH conviction.
+    // Check 48h AI cache
+    const { data: cached } = await supabase
+      .from('ai_plans')
+      .select('*')
+      .eq('ticker', stock.ticker)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
 
-Respond ONLY with a valid JSON object, no markdown.`
+    if (cached) {
+      const age = Date.now() - new Date(cached.created_at).getTime()
+      if (age < PLAN_TTL) {
+        const livePrice = await getLivePrice(stock.ticker)
+        return Response.json({
+          ...cached.plan,
+          _cached: true,
+          _cachedAt: cached.created_at,
+          _livePrice: livePrice || stock.price
+        })
+      }
+    }
 
-    const userPrompt = `Analyze this stock and build a trade plan.
+    const headlines = await getNewsHeadlines(stock.ticker)
+    const price  = stock.price
+    const high52 = +(price / (1 + stock.from52h / 100)).toFixed(2)
 
-STOCK: ${stock.ticker} (${stock.name}) | Sector: ${stock.sector} | Archetype: ${stock.archetype}
+    // Build regime/trend context string
+    const regimeLabel = {
+      panic_selloff: 'PANIC SELLOFF — Market in freefall, VIX spiking',
+      bear:          'BEAR MARKET — SPY below MAs, downtrend confirmed',
+      correction:    'CORRECTION PERIOD — Pulling back, 200MA still intact',
+      lost:          'LOST PERIOD — Choppy, no clear direction',
+      neutral:       'NEUTRAL',
+      bull_relief:   'BULL RELIEF — Bouncing after hard selloff, unconfirmed recovery',
+      bull:          'BULL MARKET — Uptrend intact, supportive tape',
+      bull_run:      'BULL RUN — Market accelerating, momentum high',
+    }[stock.regime] || 'NEUTRAL'
+    const trendLabel = stock.inUptrend ? 'UPTREND (higher highs + higher lows)' : stock.inDowntrend ? 'DOWNTREND (lower highs + lower lows)' : 'SIDEWAYS/MIXED'
+    const exhaustionSignals = [
+      stock.downtrendExhausted && 'Downtrend exhaustion detected',
+      stock.volumeClimax && 'Volume climax (possible capitulation)',
+      stock.higherLowForm && 'Higher low forming',
+      stock.bullishDiv && 'Bullish RSI divergence',
+    ].filter(Boolean).join(', ') || 'None'
+
+    const systemPrompt = `You are a senior equity analyst and trader. You identify HIGH CONVICTION setups in both directions — long and short.
+
+MARKET REGIME RULES — apply strictly before building any plan:
+- PANIC SELLOFF (VIX spiking, SPY dumping fast): Do not buy anything. Cash or short only. Even strong stocks are going down. Flag all longs as AVOID.
+- BEAR MARKET (SPY below both MAs, declining): Oversold is NOT a buy signal — stocks can halve again. Only longs with confirmed relative strength OR clear downtrend exhaustion. All longs = LOW conviction max. Shorts preferred.
+- CORRECTION PERIOD (below 50MA, above 200MA): Wait for stabilization. Require visible base or exhaustion before buying. Downtrending stocks = avoid. Relative strength stocks only.
+- LOST PERIOD (choppy, no direction): Only the cleanest setups qualify. Tight stops, lower position size. Skip anything marginal.
+- BULL RELIEF (bouncing after selloff, still below MAs): Could be dead cat or real recovery — don't know yet. MEDIUM conviction max. Require follow-through confirmation. Wide stops.
+- BULL MARKET (above MAs, steady uptrend): Pullbacks to support in uptrending stocks are high conviction. Shorts need strong independent thesis.
+- BULL RUN (accelerating, strong momentum, low VIX): Ride the trend. Breakouts and momentum setups are highest conviction. Oversold pullbacks in strong stocks are aggressive buys.
+
+STOCK TREND RULES:
+- Confirmed downtrend + bear/caution market: Do NOT call a high conviction long. Only consider if downtrend is clearly exhausting. Flag HIGH risk.
+- Confirmed downtrend + bull market: Possible mean reversion but require exhaustion signals and wide stop. MEDIUM conviction max.
+- Uptrend in any regime: Valid long if not overbought.
+- Downtrend with exhaustion signals: Worth watching for entry — wait for higher low confirmation.
+
+NEWS RULES:
+- Fraud, SEC/DOJ, accounting restatement: HIGH risk — avoid longs
+- Earnings miss, guidance cut, CEO departure: MEDIUM risk
+- Macro/sector selloff: LOW risk — often opportunity
+
+Respond ONLY with valid JSON, no markdown.`
+
+    const userPrompt = `Build a complete trade plan for ${stock.ticker}.
+
+STOCK: ${stock.ticker} (${stock.name}) | Sector: ${stock.sector}
 
 FUNDAMENTALS:
-- EPS beat: ${stock.eps_beat}% | Revenue growth: ${stock.rev_growth}% | Net margin: ${stock.margin}%
-- ROE: ${stock.roe}% | P/E: ${stock.pe}x | Debt/Equity: ${stock.debt_eq}
+- Revenue growth: ${stock.rev_growth}% | Net margin: ${stock.margin}% | ROE: ${stock.roe}%
+- P/E: ${stock.pe}x | Debt/Equity: ${stock.debt_eq}
 
-TECHNICAL:
-- RSI: ${stock.rsi} | Distance from 52w high: ${stock.from52h}% | Volume ratio: ${stock.vol_ratio}x
+PRICE ACTION:
+- Current price: $${price} | 52w high: $${high52} | Distance from high: ${stock.from52h}%
+- RSI: ${stock.rsi} | Volume trend: ${stock.volTrend || stock.vol_ratio}x
 - Pattern: ${stock.pattern}
+${stock.ma20Pct != null ? `- MA20: ${stock.ma20Pct > 0 ? '+' : ''}${stock.ma20Pct}% | MA50: ${stock.ma50Pct > 0 ? '+' : ''}${stock.ma50Pct || 0}%` : ''}
+${stock.ma20Slope != null ? `- MA20 slope: ${stock.ma20Slope > 0 ? 'rising' : 'falling'} | MA50 slope: ${(stock.ma50Slope || 0) > 0 ? 'rising' : 'falling'}` : ''}
 
-CONTEXT:
-- Overhang: ${stock.overhang}
-- Macro tailwind: ${stock.macro}
-- Sentiment: ${stock.sentiment}/100
+MARKET & TREND CONTEXT:
+- Market regime: ${regimeLabel} (VIX: ${stock.marketVix || 'N/A'}, SPY 20d: ${stock.spyMom20 != null ? stock.spyMom20 + '%' : 'N/A'})
+- Stock trend: ${trendLabel}
+- Exhaustion signals: ${exhaustionSignals}
+- Relative strength vs market: ${stock.relativeStrength != null ? Math.round(stock.relativeStrength) + '/100' : 'N/A'}
 
-Respond ONLY with this JSON:
+RECENT NEWS:
+${headlines || '- No recent headlines found'}
+
+TASK:
+1. Assess regime impact — is this a viable trade given current market conditions?
+2. Assess news risk: LOW / MEDIUM / HIGH
+3. Determine direction: LONG or SHORT
+4. Entry logic — in a downtrend only enter after exhaustion is confirmed, not just because RSI is low
+5. Stop: 4-7% from entry at structural invalidation
+6. TPs: TP1 +8-12%, TP2 +18-25%, TP3 +35-65%
+7. Bear + downtrend + no exhaustion = LOW conviction max, explain clearly in risk_note
+
+Return ONLY this JSON:
 {
+  "direction": "LONG or SHORT",
+  "news_risk": "LOW or MEDIUM or HIGH",
+  "news_summary": "1 sentence on what news is driving price",
+  "regime_assessment": "1 sentence on how market regime affects this trade",
   "overhang_rational": false,
-  "overhang_reasoning": "2-3 sentences stress-testing the selloff",
-  "thesis": "2-3 sentences connecting fundamentals + overhang resolution + macro",
-  "overhang_resolution": "why and when this resolves",
-  "entry_logic": "exact chart trigger",
-  "entry_price_note": "where relative to pattern",
-  "stop_logic": "exactly where and why",
-  "tp1": "first trim target",
-  "tp2": "second trim",
-  "tp3": "runner target",
-  "instrument": "Calls or LEAPs or Stock",
-  "timeframe": "e.g. 2-6 weeks",
-  "risk_note": "the one thing that invalidates this",
+  "overhang_reasoning": "2-3 sentences on why stock is at this price",
+  "thesis": "2-3 sentences: direction + catalyst + why now",
+  "overhang_resolution": "what resolves the overhang or triggers the decline",
+  "entry_price": 123.45,
+  "entry_logic": "why this price is the right entry",
+  "entry_price_note": "what this level represents technically",
+  "stop_price": 115.00,
+  "stop_logic": "why this is the invalidation point",
+  "tp1_price": 134.00,
+  "tp1_logic": "why trim here",
+  "tp2_price": 148.00,
+  "tp2_logic": "why trim here",
+  "tp3_price": 175.00,
+  "tp3_logic": "runner target",
+  "rr": 3.2,
+  "instrument": "Calls/LEAPs/Stock for longs, Puts/Stock short for shorts",
+  "timeframe": "specific timeframe",
+  "risk_note": "the one thing that invalidates this trade",
   "conviction": "HIGH or MEDIUM or LOW"
 }`
 
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1000,
+      max_tokens: 1200,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }]
     })
 
-    const raw = message.content[0].text.trim()
-      .replace(/^```json\s*/, '').replace(/^```\s*/, '').replace(/\s*```$/, '').trim()
+    const rawText = message.content[0].text.trim()
+    const jsonMatch = rawText.match(/\{[\s\S]*\}/)
+    if (!jsonMatch) throw new Error('No JSON in response')
+    const plan = JSON.parse(jsonMatch[0])
 
-    return Response.json(JSON.parse(raw))
+    // Fallbacks
+    if (!plan.entry_price) plan.entry_price = stock.price
+    if (!plan.stop_price)  plan.stop_price  = +(stock.price * 0.94).toFixed(2)
+    if (!plan.tp1_price)   plan.tp1_price   = +(stock.price * 1.10).toFixed(2)
+    if (!plan.tp2_price)   plan.tp2_price   = +(stock.price * 1.20).toFixed(2)
+    if (!plan.tp3_price)   plan.tp3_price   = +(stock.price * 1.35).toFixed(2)
+    if (!plan.thesis)      plan.thesis      = 'Analysis unavailable — please retry.'
+    if (!plan.direction)   plan.direction   = 'LONG'
+    if (!plan.conviction)  plan.conviction  = 'LOW'
+
+    await supabase.from('ai_plans').insert({
+      ticker: stock.ticker,
+      plan,
+      created_at: new Date().toISOString()
+    })
+
+    return Response.json(plan)
   } catch (err) {
     return Response.json({ error: err.message }, { status: 500 })
   }

@@ -1,0 +1,20 @@
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+)
+
+export async function POST(req) {
+  try {
+    const { subscription, user_id } = await req.json()
+    await supabase.from('push_subscriptions').upsert({
+      user_id,
+      subscription: JSON.stringify(subscription),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id' })
+    return Response.json({ ok: true })
+  } catch (err) {
+    return Response.json({ error: err.message }, { status: 500 })
+  }
+}

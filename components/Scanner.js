@@ -2,6 +2,22 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 
+async function registerPush(userId) {
+  try {
+    const reg = await navigator.serviceWorker.register('/sw.js')
+    const existing = await reg.pushManager.getSubscription()
+    const sub = existing || await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    })
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscription: sub, user_id: userId })
+    })
+  } catch (e) { console.error('Push registration failed:', e) }
+}
+
 const C = {
   catalyst_surprise:   { label: 'Catalyst Surprise',   color: '#2563eb', bg: '#eff6ff' },
   earnings_mispricing: { label: 'Earnings Mispricing', color: '#059669', bg: '#ecfdf5' },
@@ -35,7 +51,116 @@ function Spinner({ message }) {
   )
 }
 
-function PlanModal({ stock, onClose }) {
+function LevelChart({ stock, plan }) {
+  const [prices, setPrices] = useState([])
+  const price = stock.price
+  const stop  = plan?.stop_price  || +(price * (1 - stock.stopPct / 100)).toFixed(2)
+  const entry = plan?.entry_price || price
+  const tp1   = plan?.tp1_price   || +(price * 1.08).toFixed(2)
+  const tp2   = plan?.tp2_price   || +(price * 1.15).toFixed(2)
+  const tp3   = plan?.tp3_price   || +(price * (1 + stock.upside / 100)).toFixed(2)
+
+  useEffect(() => {
+    fetch(`/api/chart?ticker=${stock.ticker}`)
+      .then(r => r.json())
+      .then(d => { if (d.prices) setPrices(d.prices) })
+      .catch(() => {})
+  }, [stock.ticker])
+
+  const W = 608, H = 200, PAD_L = 62, PAD_R = 40, PAD_T = 14, PAD_B = 14
+  const chartH = H - PAD_T - PAD_B
+  const chartW = W - PAD_L - PAD_R
+  const allPrices = [stop, entry, tp1, tp2, tp3, ...(prices.length ? prices : [price])]
+  const minP = Math.min(...allPrices) * 0.993
+  const maxP = Math.max(...allPrices) * 1.007
+  const range = maxP - minP
+  const toY = p => PAD_T + chartH - ((p - minP) / range) * chartH
+  const toX = i => PAD_L + (i / Math.max(prices.length - 1, 1)) * chartW
+
+  const levels = [
+    { price: stop,  color: '#ef4444', label: 'Stop',  dash: false },
+    { price: entry, color: '#eab308', label: 'Entry', dash: true  },
+    { price: tp1,   color: '#4ade80', label: 'TP1',   dash: false },
+    { price: tp2,   color: '#22c55e', label: 'TP2',   dash: false },
+    { price: tp3,   color: '#059669', label: 'TP3',   dash: false },
+  ]
+
+  const linePath = prices.length > 1
+    ? prices.map((p, i) => `${i === 0 ? 'M' : 'L'} ${toX(i).toFixed(1)} ${toY(p).toFixed(1)}`).join(' ')
+    : null
+  const areaPath = linePath
+    ? `${linePath} L ${toX(prices.length - 1).toFixed(1)} ${H} L ${PAD_L} ${H} Z`
+    : null
+  const lastColor = prices.length > 1 && prices[prices.length - 1] > prices[0] ? '#22c55e' : '#ef4444'
+
+  return (
+    <div style={{ background: '#0a0a0a', borderRadius: 10, overflow: 'hidden', marginBottom: 4 }}>
+      <svg width="100%" height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+        <defs>
+          <linearGradient id={`grad_${stock.ticker}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={lastColor} stopOpacity="0.15" />
+            <stop offset="100%" stopColor={lastColor} stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {areaPath && <path d={areaPath} fill={`url(#grad_${stock.ticker})`} />}
+        {linePath && <path d={linePath} fill="none" stroke={lastColor} strokeWidth={1.5} opacity={0.8} />}
+        {levels.map(({ price: p, color, label, dash }) => {
+          const y = toY(p)
+          return (
+            <g key={label}>
+              <line x1={PAD_L} y1={y} x2={W - PAD_R} y2={y} stroke={color} strokeWidth={1.2} strokeDasharray={dash ? '6 4' : 'none'} opacity={0.9} />
+              <text x={PAD_L - 5} y={y + 4} textAnchor="end" fill={color} fontSize={9} fontFamily="monospace">${p}</text>
+              <text x={W - PAD_R + 5} y={y + 4} textAnchor="start" fill={color} fontSize={9} fontFamily="monospace" opacity={0.85}>{label}</text>
+            </g>
+          )
+        })}
+        {prices.length > 0 && (
+          <circle cx={toX(prices.length - 1)} cy={toY(entry)} r={3.5} fill="#eab308" />
+        )}
+      </svg>
+    </div>
+  )
+}
+
+function FollowButton({ stock, plan, userId }) {
+  const [following, setFollowing] = useState(false)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!userId || !stock.ticker) return
+    fetch(`/api/follow?user_id=${userId}`)
+      .then(r => r.json())
+      .then(d => setFollowing((d.following || []).includes(stock.ticker)))
+  }, [stock.ticker, userId])
+
+  const toggle = async () => {
+    if (!userId) return
+    setLoading(true)
+    const entry = plan?.entry_price || +(stock.price).toFixed(2)
+    const stop  = plan?.stop_price  || +(stock.price * (1 - stock.stopPct / 100)).toFixed(2)
+    const tp1   = plan?.tp1_price   || +(stock.price * 1.08).toFixed(2)
+    const tp2   = plan?.tp2_price   || +(stock.price * 1.15).toFixed(2)
+    const tp3   = plan?.tp3_price   || +(stock.price * (1 + stock.upside / 100)).toFixed(2)
+    const res = await fetch('/api/follow', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: userId, ticker: stock.ticker, entry, stop, tp1, tp2, tp3, active: true, plan_data: plan })
+    })
+    const data = await res.json()
+    setFollowing(data.following)
+    if (data.following) registerPush(userId)
+    setLoading(false)
+  }
+
+  return (
+    <button onClick={toggle} disabled={loading}
+      style={{ background: following ? '#ecfdf5' : '#111', color: following ? '#059669' : '#fff', border: following ? '1px solid #bbf7d0' : 'none', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500, cursor: 'pointer', opacity: loading ? 0.6 : 1 }}>
+      {loading ? '...' : following ? '✓ Following' : '+ Follow & Alert'}
+    </button>
+  )
+}
+
+function PlanModal({ stock, onClose, userId }) {
   const [plan, setPlan] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
@@ -46,7 +171,7 @@ function PlanModal({ stock, onClose }) {
     fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(stock)
+      body: JSON.stringify({ ...stock, user_id: userId })
     })
       .then(r => r.json())
       .then(p => { setPlan(p); setLoading(false) })
@@ -60,13 +185,16 @@ function PlanModal({ stock, onClose }) {
       <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 16, width: '100%', maxWidth: 660, maxHeight: '90vh', overflow: 'auto', boxShadow: '0 32px 80px rgba(0,0,0,0.18)' }}>
         <div style={{ padding: '22px 26px 18px', borderBottom: '1px solid #f1f5f9', position: 'sticky', top: 0, background: '#fff', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <span style={{ fontFamily: "'Instrument Serif', serif", fontSize: 24, color: '#111' }}>{stock.ticker}</span>
               <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 16, color: '#374151', fontWeight: 600 }}>${stock.price}</span>
               <Tag {...arch} />
-              {plan && <span style={{ fontSize: 10, fontWeight: 500, color: CONV[plan.conviction]?.color, background: CONV[plan.conviction]?.bg, padding: '2px 7px', borderRadius: 4 }}>{plan.conviction}</span>}
+              {plan?.conviction && <span style={{ fontSize: 10, fontWeight: 500, color: CONV[plan.conviction]?.color, background: CONV[plan.conviction]?.bg, padding: '2px 7px', borderRadius: 4 }}>{plan.conviction}</span>}
+              {plan?.direction && <span style={{ fontSize: 10, fontWeight: 700, color: plan.direction === 'SHORT' ? '#ef4444' : '#059669', background: plan.direction === 'SHORT' ? '#fff5f5' : '#f0fdf4', border: '1px solid ' + (plan.direction === 'SHORT' ? '#fee2e2' : '#bbf7d0'), padding: '2px 7px', borderRadius: 4 }}>{plan.direction}</span>}
+              {plan?.news_risk && <span style={{ fontSize: 10, fontWeight: 600, color: plan.news_risk === 'HIGH' ? '#dc2626' : plan.news_risk === 'MEDIUM' ? '#b45309' : '#059669', background: plan.news_risk === 'HIGH' ? '#fff5f5' : plan.news_risk === 'MEDIUM' ? '#fffbeb' : '#f0fdf4', border: '1px solid ' + (plan.news_risk === 'HIGH' ? '#fee2e2' : plan.news_risk === 'MEDIUM' ? '#fde68a' : '#bbf7d0'), padding: '2px 7px', borderRadius: 4 }}>⚡ {plan.news_risk} Risk</span>}
             </div>
-            <div style={{ fontSize: 11, color: '#94a3b8' }}>{stock.name} · {stock.sector} · Score {stock.score}/100 · ~{stock.rr}R</div>
+            {plan && <FollowButton stock={stock} plan={plan} userId={userId} />}
+            <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>{stock.name} · {stock.sector} · Score {stock.score}/100 · ~{stock.rr}R</div>
           </div>
           <button onClick={onClose} style={{ background: '#f8fafc', border: '1px solid #e8ecf0', color: '#6b7280', width: 30, height: 30, borderRadius: 8, fontSize: 15, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
         </div>
@@ -78,6 +206,21 @@ function PlanModal({ stock, onClose }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              <LevelChart stock={stock} plan={plan} />
+              {plan?.regime_assessment && (
+                <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '11px 13px' }}>
+                  <div style={{ fontSize: 10, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 4 }}>🌍 Market Regime</div>
+                  <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.5 }}>{plan.regime_assessment}</div>
+                </div>
+              )}
+              {plan?.news_summary && (
+                <div style={{ background: plan.news_risk === 'HIGH' ? '#fff5f5' : plan.news_risk === 'MEDIUM' ? '#fffbeb' : '#f0fdf4', border: `1px solid ${plan.news_risk === 'HIGH' ? '#fecaca' : plan.news_risk === 'MEDIUM' ? '#fde68a' : '#bbf7d0'}`, borderRadius: 8, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 10, color: plan.news_risk === 'HIGH' ? '#dc2626' : plan.news_risk === 'MEDIUM' ? '#b45309' : '#059669', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: 5 }}>
+                    📰 News Context — {plan.news_risk} Risk
+                  </div>
+                  <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.6 }}>{plan.news_summary}</div>
+                </div>
+              )}
               <div style={{ background: plan.overhang_rational === false ? '#ecfdf5' : '#fffbeb', border: `1px solid ${plan.overhang_rational === false ? '#bbf7d0' : '#fde68a'}`, borderRadius: 8, padding: '13px 15px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                   <span style={{ fontSize: 14 }}>{plan.overhang_rational === false ? '🟢' : '🟡'}</span>
@@ -102,17 +245,19 @@ function PlanModal({ stock, onClose }) {
               </div>
               <div style={{ background: '#f8fafc', borderRadius: 8, padding: '12px 14px' }}>
                 <div style={{ fontSize: 10, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 5 }}>Entry trigger</div>
+                {plan.entry_price && <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 16, fontWeight: 700, color: '#eab308', marginBottom: 4 }}>${plan.entry_price}</div>}
                 <div style={{ fontSize: 13, color: '#111', lineHeight: 1.55, marginBottom: 4 }}>{plan.entry_logic}</div>
                 <div style={{ fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>{plan.entry_price_note}</div>
               </div>
               <div style={{ background: '#fff5f5', border: '1px solid #fee2e2', borderRadius: 8, padding: '11px 13px' }}>
-                <div style={{ fontSize: 10, color: '#ef4444', textTransform: 'uppercase', marginBottom: 4 }}>Stop loss · ~{stock.stopPct}% risk</div>
+                <div style={{ fontSize: 10, color: '#ef4444', textTransform: 'uppercase', marginBottom: 4 }}>Stop loss{plan.stop_price && <span> · ${plan.stop_price}</span>}</div>
                 <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.55 }}>{plan.stop_logic}</div>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                {[['TP1 — Trim ⅓', plan.tp1], ['TP2 — Trim ⅓', plan.tp2], ['TP3 — Runner', plan.tp3]].map(([l, v]) => (
+                {[['TP1 — Trim ⅓', plan.tp1_price, plan.tp1_logic], ['TP2 — Trim ⅓', plan.tp2_price, plan.tp2_logic], ['TP3 — Runner', plan.tp3_price, plan.tp3_logic]].map(([l, p, v]) => (
                   <div key={l} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '10px 11px' }}>
                     <div style={{ fontSize: 9, color: '#6b7280', textTransform: 'uppercase', marginBottom: 3 }}>{l}</div>
+                    {p && <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 13, fontWeight: 700, color: '#059669', marginBottom: 2 }}>${p}</div>}
                     <div style={{ fontSize: 11, color: '#059669', lineHeight: 1.4 }}>{v}</div>
                   </div>
                 ))}
@@ -129,9 +274,9 @@ function PlanModal({ stock, onClose }) {
   )
 }
 
-const CACHE_TTL = 24 * 60 * 60 * 1000
+const CACHE_TTL = 6 * 60 * 60 * 1000
 
-export default function Scanner() {
+export default function Scanner({ profile }) {
   const [stocks, setStocks] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadMsg, setLoadMsg] = useState('Checking cache...')
@@ -141,64 +286,30 @@ export default function Scanner() {
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState(null)
   const [updatedAt, setUpdatedAt] = useState(null)
-  const [dataSource, setDataSource] = useState('jcedge')   // 'jcedge' | 'bot'
-  const [botLimit, setBotLimit] = useState(10)             // 3 | 5 | 10
 
-  const loadStocks = async (forceRefresh = false, source = dataSource, limit = botLimit) => {
+  const loadStocks = async (forceRefresh = false) => {
     setLoading(true); setError(null)
-
-    if (source === 'jcedge' && !forceRefresh) {
+    if (!forceRefresh) {
       try {
         const { data: cached } = await supabase
-          .from('scanner_cache')
-          .select('*')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single()
-
+          .from('scanner_cache').select('*')
+          .order('created_at', { ascending: false }).limit(1).single()
         if (cached) {
           const age = Date.now() - new Date(cached.created_at).getTime()
           if (age < CACHE_TTL) {
-            setStocks(cached.data)
-            setUpdatedAt(cached.created_at)
-            setLoading(false)
-            return
+            setStocks(cached.data); setUpdatedAt(cached.created_at)
+            setLoading(false); return
           }
         }
-      } catch (e) {
-        // No cache yet
-      }
+      } catch {}
     }
-
-    if (source === 'bot') {
-      setLoadMsg(`Fetching top ${limit} from Trading Bot...`)
-      try {
-        const res = await fetch(`/api/trading-bot-scanner?limit=${limit}`)
-        if (!res.ok) throw new Error('Trading bot unreachable')
-        const json = await res.json()
-        if (json.error) throw new Error(json.error)
-        setStocks(json.stocks)
-        setUpdatedAt(json.updatedAt)
-        setLoading(false)
-      } catch (err) {
-        setError(err.message)
-        setLoading(false)
-      }
-      return
-    }
-
-    setLoadMsg('Fetching QQQ + SPY universe...')
+    setLoadMsg('Fetching live data...')
     try {
       const res = await fetch('/api/scanner')
       if (!res.ok) throw new Error('Failed to fetch scanner data')
       const json = await res.json()
       if (json.error) throw new Error(json.error)
-
-      await supabase.from('scanner_cache').insert({
-        data: json.stocks,
-        created_at: new Date().toISOString()
-      })
-
+      await supabase.from('scanner_cache').insert({ data: json.stocks, created_at: new Date().toISOString() })
       await supabase.from('bot_scan_results').delete().neq('id', 0)
       await supabase.from('bot_scan_results').insert(
         json.stocks.slice(0, 10).map(s => ({
@@ -220,77 +331,51 @@ export default function Scanner() {
           scanned_at: new Date().toISOString(),
         }))
       )
-
-      setStocks(json.stocks)
-      setUpdatedAt(json.updatedAt)
+      setStocks(json.stocks); setUpdatedAt(json.updatedAt)
       setLoading(false)
     } catch (err) {
-      setError(err.message)
-      setLoading(false)
+      setError(err.message); setLoading(false)
     }
-  }
-
-  const switchSource = (src) => {
-    setDataSource(src)
-    setFilter('all')
-    loadStocks(true, src, botLimit)
-  }
-
-  const switchLimit = (lim) => {
-    setBotLimit(lim)
-    loadStocks(true, 'bot', lim)
   }
 
   useEffect(() => { loadStocks() }, [])
 
   const filters = [
-    { id: 'all', label: 'All' },
-    { id: 'catalyst_surprise', label: 'Catalyst Surprise' },
-    { id: 'earnings_mispricing', label: 'Earnings Mispricing' },
-    { id: 'macro_pattern', label: 'Macro + Pattern' },
-    { id: 'deep_value', label: 'Deep Value' },
+    { id: 'all',                label: 'All' },
+    { id: 'long',               label: '🟢 Long' },
+    { id: 'short',              label: '🔴 Short' },
+    { id: 'oversold',           label: 'Oversold' },
+    { id: 'overbought',         label: 'Overbought' },
+    { id: 'earnings_mispricing',label: 'Earnings Mispricing' },
+    { id: 'macro_pattern',      label: 'Macro + Pattern' },
+    { id: 'deep_value',         label: 'Deep Value' },
   ]
 
   const displayed = [...stocks]
-    .filter(s => filter === 'all' || s.archetype === filter)
+    .filter(s => {
+      if (filter === 'all')        return true
+      if (filter === 'long')       return s.direction === 'long'
+      if (filter === 'short')      return s.direction === 'short'
+      if (filter === 'oversold')   return s.rsi < 35
+      if (filter === 'overbought') return s.rsi > 70
+      return s.archetype === filter
+    })
     .filter(s => !search || s.ticker.includes(search.toUpperCase()) || s.name?.toLowerCase().includes(search.toLowerCase()))
     .sort((a, b) => sort === 'rr' ? b.rr - a.rr : sort === 'growth' ? b.rev_growth - a.rev_growth : b.score - a.score)
 
   return (
     <div>
-      {expanded && <PlanModal stock={expanded} onClose={() => setExpanded(null)} />}
+      {expanded && <PlanModal stock={expanded} onClose={() => setExpanded(null)} userId={profile?.id} />}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h2 style={{ fontFamily: "'Instrument Serif', serif", fontSize: 28, color: '#111', marginBottom: 4 }}>Top Setups</h2>
           <p style={{ fontSize: 13, color: '#94a3b8' }}>
-            {dataSource === 'jcedge'
-              ? 'QQQ + SPY universe · scored on fundamentals · macro · mispricing · technical'
-              : `S&P 500 · volume spike · momentum · RSI · top ${botLimit} from Trading Bot`}
+            150-stock universe · scored on fundamentals · macro · mispricing · technical
             {updatedAt && <span> · Updated {new Date(updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* Source toggle */}
-          <div style={{ display: 'flex', gap: 2, background: '#f8fafc', borderRadius: 10, padding: 3 }}>
-            {[{ id: 'jcedge', label: 'JCedge' }, { id: 'bot', label: 'Trading Bot' }].map(s => (
-              <button key={s.id} onClick={() => switchSource(s.id)}
-                style={{ background: dataSource === s.id ? '#111' : 'none', border: 'none', boxShadow: dataSource === s.id ? '0 1px 4px rgba(0,0,0,0.12)' : 'none', color: dataSource === s.id ? '#fff' : '#6b7280', padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: dataSource === s.id ? 600 : 400, whiteSpace: 'nowrap' }}>
-                {s.label}
-              </button>
-            ))}
-          </div>
-          {/* Limit picker — only when Trading Bot is active */}
-          {dataSource === 'bot' && (
-            <div style={{ display: 'flex', gap: 2, background: '#f8fafc', borderRadius: 10, padding: 3 }}>
-              {[3, 5, 10].map(n => (
-                <button key={n} onClick={() => switchLimit(n)}
-                  style={{ background: botLimit === n ? '#fff' : 'none', border: 'none', boxShadow: botLimit === n ? '0 1px 4px rgba(0,0,0,0.08)' : 'none', color: botLimit === n ? '#111' : '#6b7280', padding: '6px 10px', borderRadius: 8, fontSize: 12, fontWeight: botLimit === n ? 600 : 400 }}>
-                  Top {n}
-                </button>
-              ))}
-            </div>
-          )}
           <button onClick={() => loadStocks(true)}
             style={{ background: '#f8fafc', border: '1px solid #e8ecf0', color: '#374151', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500 }}>
             ↻ Refresh
@@ -298,15 +383,63 @@ export default function Scanner() {
         </div>
       </div>
 
-      {loading ? (
-        <Spinner message={loadMsg} />
-      ) : error ? (
+      {loading ? <Spinner message={loadMsg} /> : error ? (
         <div style={{ background: '#fff5f5', border: '1px solid #fee2e2', borderRadius: 12, padding: '32px', textAlign: 'center' }}>
           <div style={{ fontSize: 13, color: '#ef4444', marginBottom: 12 }}>Error: {error}</div>
           <button onClick={() => loadStocks(true)} style={{ background: '#111', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: 8, fontSize: 13 }}>Retry</button>
         </div>
       ) : (
         <>
+          {/* Market regime banner */}
+          {stocks.length > 0 && stocks[0].regime && (() => {
+            const r = stocks[0].regime
+            const vix = stocks[0].marketVix
+            const colors = {
+              panic_selloff: { bg: '#fef2f2', border: '#fca5a5', text: '#b91c1c', icon: '🚨' },
+              bear:          { bg: '#fff5f5', border: '#fecaca', text: '#dc2626', icon: '🐻' },
+              correction:    { bg: '#fff7ed', border: '#fed7aa', text: '#c2410c', icon: '📉' },
+              lost:          { bg: '#faf5ff', border: '#d8b4fe', text: '#7c3aed', icon: '🌀' },
+              neutral:       { bg: '#f8fafc', border: '#e2e8f0', text: '#64748b', icon: '〰️' },
+              bull_relief:   { bg: '#fefce8', border: '#fde047', text: '#854d0e', icon: '🟡' },
+              bull:          { bg: '#f0fdf4', border: '#bbf7d0', text: '#059669', icon: '🐂' },
+              bull_run:      { bg: '#ecfdf5', border: '#6ee7b7', text: '#065f46', icon: '🚀' },
+            }
+            const c = colors[r] || colors.neutral
+            const label = {
+              panic_selloff: 'Panic Selloff',
+              bear:          'Bear Market',
+              correction:    'Correction Period',
+              lost:          'Lost Period',
+              neutral:       'Neutral',
+              bull_relief:   'Bull Relief',
+              bull:          'Bull Market',
+              bull_run:      'Bull Run',
+            }[r] || r
+            const desc = {
+              panic_selloff: 'Market in freefall — VIX spiking, SPY dumping hard. Do not catch falling knives. Cash or short only.',
+              bear:          'SPY below key MAs, downtrend confirmed. Oversold ≠ buyable. Relative strength longs or shorts only.',
+              correction:    'Market pulling back but 200MA intact. Wait for stabilization. Require exhaustion signals before buying.',
+              lost:          'Market is choppy with no clear direction. Avoid low conviction setups. Only the cleanest charts qualify.',
+              neutral:       'Mixed conditions. Evaluate each setup on its own merit.',
+              bull_relief:   'Market bouncing after a hard selloff — could be dead cat or real recovery. Wait for confirmation before going heavy.',
+              bull:          'Supportive tape. Pullbacks in strong stocks are buying opportunities. Shorts require strong thesis.',
+              bull_run:      'Market accelerating. Momentum setups and breakouts are highest conviction. Ride the trend.',
+            }[r] || ''
+            return (
+              <div style={{ background: c.bg, border: `1px solid ${c.border}`, borderRadius: 10, padding: '12px 16px', marginBottom: 16, display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                <span style={{ fontSize: 18, flexShrink: 0 }}>{c.icon}</span>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: c.text, textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}</span>
+                    {vix && <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: c.text, background: c.border, padding: '1px 6px', borderRadius: 4 }}>VIX {vix?.toFixed(1)}</span>}
+                    {stocks[0].spyMom20 != null && <span style={{ fontFamily: "'Geist Mono', monospace", fontSize: 11, color: stocks[0].spyMom20 >= 0 ? '#059669' : '#dc2626' }}>SPY 20d: {stocks[0].spyMom20 > 0 ? '+' : ''}{stocks[0].spyMom20}%</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#374151', lineHeight: 1.5 }}>{desc}</div>
+                </div>
+              </div>
+            )
+          })()}
+
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
             <div style={{ display: 'flex', gap: 2, background: '#f8fafc', borderRadius: 10, padding: 3, flexWrap: 'wrap' }}>
               {filters.map(f => (
@@ -335,7 +468,7 @@ export default function Scanner() {
               const arch = C[s.archetype] || C.catalyst_surprise
               return (
                 <div key={s.ticker} onClick={() => setExpanded(s)}
-                  style={{ background: '#fff', border: '1px solid #e8ecf0', borderRadius: 12, padding: '18px 20px', cursor: 'pointer', transition: 'all 0.15s' }}
+                  style={{ background: '#fff', border: '1px solid #e8ecf0', borderRadius: 12, padding: '18px 20px', cursor: 'pointer', transition: 'all 0.15s', animation: `fadeIn 0.3s ease ${Math.min(i * 0.03, 0.5)}s both` }}
                   onMouseEnter={e => { e.currentTarget.style.borderColor = '#111'; e.currentTarget.style.boxShadow = '0 4px 20px rgba(0,0,0,0.07)'; e.currentTarget.style.transform = 'translateY(-1px)' }}
                   onMouseLeave={e => { e.currentTarget.style.borderColor = '#e8ecf0'; e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'none' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
@@ -343,6 +476,9 @@ export default function Scanner() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
                         <span style={{ fontWeight: 700, fontSize: 15, color: '#111' }}>{s.ticker}</span>
                         <Tag {...arch} />
+                        {s.direction === 'short' && <span style={{ fontSize: 9, fontWeight: 700, color: '#ef4444', background: '#fff5f5', border: '1px solid #fee2e2', padding: '1px 5px', borderRadius: 3 }}>SHORT</span>}
+                        {s.rsi < 35 && <span style={{ fontSize: 9, fontWeight: 600, color: '#7c3aed', background: '#f5f3ff', border: '1px solid #ddd6fe', padding: '1px 5px', borderRadius: 3 }}>OVERSOLD</span>}
+                        {s.rsi > 70 && <span style={{ fontSize: 9, fontWeight: 600, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', padding: '1px 5px', borderRadius: 3 }}>OVERBOUGHT</span>}
                       </div>
                       <div style={{ fontSize: 11, color: '#94a3b8' }}>{s.name} · {s.sector}</div>
                     </div>
@@ -366,7 +502,7 @@ export default function Scanner() {
                   <ScoreBar val={s.score} max={100} color="#111" />
 
                   <div style={{ display: 'flex', gap: 10, marginTop: 12, marginBottom: 12 }}>
-                    {[['Fund.', s.breakdown.fundamentals, 30, '#2563eb'], ['Macro', s.breakdown.macro, 25, '#7c3aed'], ['Misprice', s.breakdown.mispricing, 25, '#059669'], ['Tech', s.breakdown.technical, 20, '#b45309']].map(([l, v, m, c]) => (
+                    {[['Fund.', s.breakdown.fundamentals, 20, '#2563eb'], ['Macro', s.breakdown.macro, 20, '#7c3aed'], ['Misprice', s.breakdown.mispricing, 20, '#059669'], ['Tech', s.breakdown.technical, 40, '#b45309']].map(([l, v, m, c]) => (
                       <div key={l} style={{ flex: 1 }}>
                         <div style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 2 }}>{l}</div>
                         <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, fontWeight: 600, color: '#111', marginBottom: 3 }}>{v != null ? v : '–'}{v != null && <span style={{ fontSize: 9, color: '#d1d5db' }}>/{m}</span>}</div>
@@ -377,9 +513,9 @@ export default function Scanner() {
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, marginBottom: 10 }}>
                     {[
-                      ['Rev Grw', s.rev_growth != null ? `${s.rev_growth > 0 ? '+' : ''}${s.rev_growth}%` : '–', s.rev_growth > 0],
-                      ['Margin', s.margin != null ? `${s.margin}%` : '–', s.margin > 10],
-                      ['P/E', s.pe > 0 ? `${s.pe}x` : 'N/A', false]
+                      ['Rev Grw', `${s.rev_growth > 0 ? '+' : ''}${s.rev_growth}%`, s.rev_growth > 0],
+                      ['Margin',  `${s.margin}%`, s.margin > 10],
+                      ['P/E',     s.pe > 0 ? `${s.pe}x` : 'N/A', false]
                     ].map(([l, v, pos]) => (
                       <div key={l} style={{ background: '#f8fafc', borderRadius: 6, padding: '6px 8px' }}>
                         <div style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', marginBottom: 2 }}>{l}</div>

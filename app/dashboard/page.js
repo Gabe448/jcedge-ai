@@ -27,6 +27,7 @@ export default function Dashboard() {
       setProfile(prof)
       setLoading(false)
     })
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') router.push('/auth')
     })
@@ -45,6 +46,7 @@ export default function Dashboard() {
   )
 
   const admin = isAdmin(profile)
+
   const NAV = [
     { id: 'scanner', label: 'Scanner' },
     { id: 'plans', label: 'Trade Plans' },
@@ -55,13 +57,18 @@ export default function Dashboard() {
   return (
     <div style={{ minHeight: '100vh', background: '#f9fafb' }}>
       {showAdmin && <AdminPanel onClose={() => setShowAdmin(false)} />}
+
+      {/* Nav */}
       <div style={{ background: '#fff', borderBottom: '1px solid #f1f5f9', position: 'sticky', top: 0, zIndex: 100 }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', padding: '0 28px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 58 }}>
+          {/* Logo */}
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 2 }}>
             <span style={{ fontFamily: "'Instrument Serif', serif", fontSize: 20, color: '#111' }}>JC</span>
             <span style={{ fontWeight: 600, fontSize: 20, color: '#111' }}>edge</span>
             <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 400, marginLeft: 2 }}>.ai</span>
           </div>
+
+          {/* Tabs */}
           <div style={{ display: 'flex' }}>
             {NAV.map(n => (
               <button key={n.id} onClick={() => setTab(n.id)}
@@ -70,6 +77,8 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
+
+          {/* Right side */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {admin && (
               <button onClick={() => setShowAdmin(true)}
@@ -91,8 +100,10 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Content */}
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '32px 28px' }}>
-        {tab === 'scanner'   && <Scanner />}
+        {tab === 'scanner'   && <Scanner profile={profile} />}
         {tab === 'plans'     && <TradePlans profile={profile} />}
         {tab === 'portfolio' && <Portfolio user={user} profile={profile} />}
         {tab === 'chat'      && <Chat profile={profile} />}
