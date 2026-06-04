@@ -141,11 +141,13 @@ export default function Scanner() {
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState(null)
   const [updatedAt, setUpdatedAt] = useState(null)
+  const [dataSource, setDataSource] = useState('jcedge')   // 'jcedge' | 'bot'
+  const [botLimit, setBotLimit] = useState(10)             // 3 | 5 | 10
 
-  const loadStocks = async (forceRefresh = false) => {
+  const loadStocks = async (forceRefresh = false, source = dataSource, limit = botLimit) => {
     setLoading(true); setError(null)
 
-    if (!forceRefresh) {
+    if (source === 'jcedge' && !forceRefresh) {
       try {
         const { data: cached } = await supabase
           .from('scanner_cache')
@@ -168,6 +170,23 @@ export default function Scanner() {
       }
     }
 
+    if (source === 'bot') {
+      setLoadMsg(`Fetching top ${limit} from Trading Bot...`)
+      try {
+        const res = await fetch(`/api/trading-bot-scanner?limit=${limit}`)
+        if (!res.ok) throw new Error('Trading bot unreachable')
+        const json = await res.json()
+        if (json.error) throw new Error(json.error)
+        setStocks(json.stocks)
+        setUpdatedAt(json.updatedAt)
+        setLoading(false)
+      } catch (err) {
+        setError(err.message)
+        setLoading(false)
+      }
+      return
+    }
+
     setLoadMsg('Fetching QQQ + SPY universe...')
     try {
       const res = await fetch('/api/scanner')
@@ -180,6 +199,28 @@ export default function Scanner() {
         created_at: new Date().toISOString()
       })
 
+      await supabase.from('bot_scan_results').delete().neq('id', 0)
+      await supabase.from('bot_scan_results').insert(
+        json.stocks.slice(0, 10).map(s => ({
+          ticker:     s.ticker,
+          name:       s.name,
+          sector:     s.sector,
+          price:      s.price,
+          score:      s.score,
+          rsi:        s.rsi,
+          from52h:    s.from52h,
+          vol_ratio:  s.vol_ratio,
+          rev_growth: s.rev_growth,
+          margin:     s.margin,
+          pe:         s.pe,
+          rr:         s.rr,
+          archetype:  s.archetype,
+          pattern:    s.pattern,
+          breakdown:  s.breakdown,
+          scanned_at: new Date().toISOString(),
+        }))
+      )
+
       setStocks(json.stocks)
       setUpdatedAt(json.updatedAt)
       setLoading(false)
@@ -187,6 +228,17 @@ export default function Scanner() {
       setError(err.message)
       setLoading(false)
     }
+  }
+
+  const switchSource = (src) => {
+    setDataSource(src)
+    setFilter('all')
+    loadStocks(true, src, botLimit)
+  }
+
+  const switchLimit = (lim) => {
+    setBotLimit(lim)
+    loadStocks(true, 'bot', lim)
   }
 
   useEffect(() => { loadStocks() }, [])
@@ -212,14 +264,38 @@ export default function Scanner() {
         <div>
           <h2 style={{ fontFamily: "'Instrument Serif', serif", fontSize: 28, color: '#111', marginBottom: 4 }}>Top Setups</h2>
           <p style={{ fontSize: 13, color: '#94a3b8' }}>
-            QQQ + SPY universe · scored on fundamentals · macro · mispricing · technical
+            {dataSource === 'jcedge'
+              ? 'QQQ + SPY universe · scored on fundamentals · macro · mispricing · technical'
+              : `S&P 500 · volume spike · momentum · RSI · top ${botLimit} from Trading Bot`}
             {updatedAt && <span> · Updated {new Date(updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>}
           </p>
         </div>
-        <button onClick={() => loadStocks(true)}
-          style={{ background: '#f8fafc', border: '1px solid #e8ecf0', color: '#374151', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500 }}>
-          ↻ Refresh
-        </button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Source toggle */}
+          <div style={{ display: 'flex', gap: 2, background: '#f8fafc', borderRadius: 10, padding: 3 }}>
+            {[{ id: 'jcedge', label: 'JCedge' }, { id: 'bot', label: 'Trading Bot' }].map(s => (
+              <button key={s.id} onClick={() => switchSource(s.id)}
+                style={{ background: dataSource === s.id ? '#111' : 'none', border: 'none', boxShadow: dataSource === s.id ? '0 1px 4px rgba(0,0,0,0.12)' : 'none', color: dataSource === s.id ? '#fff' : '#6b7280', padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: dataSource === s.id ? 600 : 400, whiteSpace: 'nowrap' }}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+          {/* Limit picker — only when Trading Bot is active */}
+          {dataSource === 'bot' && (
+            <div style={{ display: 'flex', gap: 2, background: '#f8fafc', borderRadius: 10, padding: 3 }}>
+              {[3, 5, 10].map(n => (
+                <button key={n} onClick={() => switchLimit(n)}
+                  style={{ background: botLimit === n ? '#fff' : 'none', border: 'none', boxShadow: botLimit === n ? '0 1px 4px rgba(0,0,0,0.08)' : 'none', color: botLimit === n ? '#111' : '#6b7280', padding: '6px 10px', borderRadius: 8, fontSize: 12, fontWeight: botLimit === n ? 600 : 400 }}>
+                  Top {n}
+                </button>
+              ))}
+            </div>
+          )}
+          <button onClick={() => loadStocks(true)}
+            style={{ background: '#f8fafc', border: '1px solid #e8ecf0', color: '#374151', padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 500 }}>
+            ↻ Refresh
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -272,7 +348,7 @@ export default function Scanner() {
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 14, fontWeight: 600, color: '#111' }}>${s.price}</div>
-                      <div style={{ fontSize: 11, color: s.from52h < -10 ? '#ef4444' : '#94a3b8' }}>{s.from52h}% off high</div>
+                      <div style={{ fontSize: 11, color: s.from52h != null && s.from52h < -10 ? '#ef4444' : '#94a3b8' }}>{s.from52h != null ? `${s.from52h}% off high` : '–'}</div>
                     </div>
                   </div>
 
@@ -293,16 +369,16 @@ export default function Scanner() {
                     {[['Fund.', s.breakdown.fundamentals, 30, '#2563eb'], ['Macro', s.breakdown.macro, 25, '#7c3aed'], ['Misprice', s.breakdown.mispricing, 25, '#059669'], ['Tech', s.breakdown.technical, 20, '#b45309']].map(([l, v, m, c]) => (
                       <div key={l} style={{ flex: 1 }}>
                         <div style={{ fontSize: 9, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 2 }}>{l}</div>
-                        <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, fontWeight: 600, color: '#111', marginBottom: 3 }}>{v}<span style={{ fontSize: 9, color: '#d1d5db' }}>/{m}</span></div>
-                        <ScoreBar val={v} max={m} color={c} />
+                        <div style={{ fontFamily: "'Geist Mono', monospace", fontSize: 12, fontWeight: 600, color: '#111', marginBottom: 3 }}>{v != null ? v : '–'}{v != null && <span style={{ fontSize: 9, color: '#d1d5db' }}>/{m}</span>}</div>
+                        <ScoreBar val={v ?? 0} max={m} color={c} />
                       </div>
                     ))}
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6, marginBottom: 10 }}>
                     {[
-                      ['Rev Grw', `${s.rev_growth > 0 ? '+' : ''}${s.rev_growth}%`, s.rev_growth > 0],
-                      ['Margin', `${s.margin}%`, s.margin > 10],
+                      ['Rev Grw', s.rev_growth != null ? `${s.rev_growth > 0 ? '+' : ''}${s.rev_growth}%` : '–', s.rev_growth > 0],
+                      ['Margin', s.margin != null ? `${s.margin}%` : '–', s.margin > 10],
                       ['P/E', s.pe > 0 ? `${s.pe}x` : 'N/A', false]
                     ].map(([l, v, pos]) => (
                       <div key={l} style={{ background: '#f8fafc', borderRadius: 6, padding: '6px 8px' }}>
