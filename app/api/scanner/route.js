@@ -1093,6 +1093,38 @@ export async function GET() {
       .filter(s => s.score >= 20)
       .sort((a, b) => b.score - a.score)
 
+    // Write top 10 to bot_scan_results so the REST connector always has fresh data
+    try {
+      const { createClient } = await import('@supabase/supabase-js')
+      const sb = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      )
+      await sb.from('bot_scan_results').delete().neq('id', 0)
+      await sb.from('bot_scan_results').insert(
+        sorted.slice(0, 10).map(s => ({
+          ticker:     s.ticker,
+          name:       s.name,
+          sector:     s.sector,
+          price:      s.price,
+          score:      s.score,
+          rsi:        s.rsi,
+          from52h:    s.from52h,
+          vol_ratio:  s.vol_ratio,
+          rev_growth: s.rev_growth,
+          margin:     s.margin,
+          pe:         s.pe,
+          rr:         s.rr,
+          archetype:  s.archetype,
+          pattern:    s.pattern,
+          breakdown:  s.breakdown,
+          scanned_at: new Date().toISOString(),
+        }))
+      )
+    } catch (e) {
+      console.error('[scanner] bot_scan_results write failed:', e.message)
+    }
+
     return Response.json({
       stocks: sorted,
       updatedAt: new Date().toISOString()

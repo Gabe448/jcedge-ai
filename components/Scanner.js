@@ -310,27 +310,6 @@ export default function Scanner({ profile }) {
       const json = await res.json()
       if (json.error) throw new Error(json.error)
       await supabase.from('scanner_cache').insert({ data: json.stocks, created_at: new Date().toISOString() })
-      await supabase.from('bot_scan_results').delete().neq('id', 0)
-      await supabase.from('bot_scan_results').insert(
-        json.stocks.slice(0, 10).map(s => ({
-          ticker:     s.ticker,
-          name:       s.name,
-          sector:     s.sector,
-          price:      s.price,
-          score:      s.score,
-          rsi:        s.rsi,
-          from52h:    s.from52h,
-          vol_ratio:  s.vol_ratio,
-          rev_growth: s.rev_growth,
-          margin:     s.margin,
-          pe:         s.pe,
-          rr:         s.rr,
-          archetype:  s.archetype,
-          pattern:    s.pattern,
-          breakdown:  s.breakdown,
-          scanned_at: new Date().toISOString(),
-        }))
-      )
       setStocks(json.stocks); setUpdatedAt(json.updatedAt)
       setLoading(false)
     } catch (err) {
