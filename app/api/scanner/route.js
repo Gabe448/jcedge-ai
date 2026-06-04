@@ -1,3 +1,10 @@
+import { createClient } from '@supabase/supabase-js'
+
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+)
+
 // Full S&P 500 + extras ticker list
 const ALL_TICKERS = [
   'MMM','AOS','ABT','ABBV','ACN','ADBE','AMD','AES','AFL','A','APD','ABNB','AKAM','ALB','ARE',
@@ -1095,13 +1102,8 @@ export async function GET() {
 
     // Write top 10 to bot_scan_results so the REST connector always has fresh data
     try {
-      const { createClient } = await import('@supabase/supabase-js')
-      const sb = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
-        process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      )
-      await sb.from('bot_scan_results').delete().neq('id', 0)
-      await sb.from('bot_scan_results').insert(
+      await supabaseAdmin.from('bot_scan_results').delete().neq('id', 0)
+      await supabaseAdmin.from('bot_scan_results').insert(
         sorted.slice(0, 10).map(s => ({
           ticker:     s.ticker,
           name:       s.name,
